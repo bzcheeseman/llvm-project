@@ -24,6 +24,7 @@
 #include "lldb/Target/DynamicLoader.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/LanguageRuntime.h"
+#include "lldb/Target/NativeInterpreter.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
 #include "lldb/Target/ScriptedThreadPlan.h"
@@ -34,6 +35,7 @@
 #include "lldb/Target/ThreadPlan.h"
 #include "lldb/Target/ThreadPlanBase.h"
 #include "lldb/Target/ThreadPlanCallFunction.h"
+#include "lldb/Target/ThreadPlanCallUserExpression.h"
 #include "lldb/Target/ThreadPlanRunToAddress.h"
 #include "lldb/Target/ThreadPlanStack.h"
 #include "lldb/Target/ThreadPlanStepInRange.h"
@@ -1566,6 +1568,24 @@ StackFrameListSP Thread::GetStackFrameList() {
   if (m_frame_providers.empty()) {
     if (process_sp) {
       Target &target = process_sp->GetTarget();
+
+      // Try to load the native interpreter plugin. If we have it, get its
+      // provider and push it into the list. The plugin instance will be the
+      // correct kind for this binary - we choose that at the target level. For
+      // example, for Python, at the target level we choose the python native
+      // interpreter plugin.
+      //
+      // Since we're the first provider, we don't have to worry about chaining
+      // them.
+
+      // TODO: Somehow, this isn't triggering until *after* we do a step or
+      // something, why not? Is it because we don't have m_prev_frames_sp?
+      if (auto native_interp_plugin = target.GetNativeInterpreterInstance()) {
+        if (auto provider =
+                native_interp_plugin->GetFrameProvider(m_prev_frames_sp))
+          m_frame_providers.push_back(std::move(provider));
+      }
+
       const auto &descriptors = target.GetScriptedFrameProviderDescriptors();
 
       // Collect all descriptors that apply to this thread.
@@ -1953,16 +1973,20 @@ bool Thread::DumpUsingFormat(Stream &strm, uint32_t frame_idx,
     return false;
 
   StackFrameSP frame_sp;
-  SymbolContext frame_sc;
+  const SymbolContext *frame_sc;
   if (frame_idx != LLDB_INVALID_FRAME_ID) {
     frame_sp = GetStackFrameAtIndex(frame_idx);
     if (frame_sp) {
       exe_ctx.SetFrameSP(frame_sp);
-      frame_sc = frame_sp->GetSymbolContext(eSymbolContextEverything);
+      // This returns a ref - don't freeze it yet. This allows synthetic frames
+      // to update themselves at any time and see the changes propagate to the
+      // formatter.
+      auto &sc = frame_sp->GetSymbolContext(eSymbolContextEverything);
+      frame_sc = &sc;
     }
   }
 
-  return FormatEntity::Formatter(frame_sp ? &frame_sc : nullptr, &exe_ctx,
+  return FormatEntity::Formatter(frame_sp ? frame_sc : nullptr, &exe_ctx,
                                  nullptr, false, false)
       .Format(*format, strm);
 }

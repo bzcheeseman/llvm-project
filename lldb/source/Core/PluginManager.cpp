@@ -1890,6 +1890,40 @@ PluginManager::GetInstrumentationRuntimeCallbacks() {
   return result;
 }
 
+#pragma mark NativeInterpreter
+
+typedef PluginInstance<NativeInterpreterCreateInstance>
+    NativeInterpreterInstance;
+typedef PluginInstances<NativeInterpreterInstance> NativeInterpreterInstances;
+
+static NativeInterpreterInstances &GetNativeInterpreterInstances() {
+  static NativeInterpreterInstances g_instances;
+  return g_instances;
+}
+
+bool PluginManager::RegisterPlugin(
+    llvm::StringRef name, llvm::StringRef description,
+    NativeInterpreterCreateInstance create_callback) {
+  return GetNativeInterpreterInstances().RegisterPlugin(name, description,
+                                                        create_callback);
+}
+
+bool PluginManager::UnregisterPlugin(
+    NativeInterpreterCreateInstance create_callback) {
+  return GetNativeInterpreterInstances().UnregisterPlugin(create_callback);
+}
+
+NativeInterpreterCreateInstance
+PluginManager::GetNativeInterpreterCreateCallbackForPluginName(
+    llvm::StringRef name) {
+  return GetNativeInterpreterInstances().GetCallbackForName(name);
+}
+
+NativeInterpreterCreateInstance
+PluginManager::GetNativeInterpreterCreateCallbackAtIndex(uint32_t idx) {
+  return GetNativeInterpreterInstances().GetCallbackAtIndex(idx);
+}
+
 #pragma mark TypeSystem
 
 struct TypeSystemInstance : public PluginInstance<TypeSystemCreateInstance> {

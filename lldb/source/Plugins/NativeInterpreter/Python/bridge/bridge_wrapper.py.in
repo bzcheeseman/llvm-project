@@ -1,0 +1,22 @@
+import sys
+
+sys.path.append("@CMAKE_LIBRARY_OUTPUT_DIRECTORY@")
+
+import lldb_bridge
+
+
+def wrapper_main(filename: str):
+    with open(filename) as f:
+        code = f.read()
+
+    tracer = lldb_bridge.ProgramState()
+
+    # Inject the settrace into the inner module.
+    code = compile("import sys; sys.settrace(tracer)\n" + code, filename, "exec")
+
+    # Pass in the tracer and pretend that __name__ is __main__ so that the script executes as normal.
+    exec(code, globals={"__name__": "__main__", "tracer": tracer})
+
+
+if __name__ == "__main__":
+    wrapper_main(sys.argv[1])

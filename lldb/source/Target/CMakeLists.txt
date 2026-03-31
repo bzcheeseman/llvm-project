@@ -28,6 +28,7 @@ add_lldb_library(lldbTarget
   MemoryRegionInfo.cpp
   MemoryTagMap.cpp
   ModuleCache.cpp
+  NativeInterpreter.cpp
   OperatingSystem.cpp
   PathMappingList.cpp
   Platform.cpp

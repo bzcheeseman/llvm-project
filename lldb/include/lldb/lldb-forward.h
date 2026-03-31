@@ -130,6 +130,7 @@ class Module;
 class ModuleList;
 class ModuleSpec;
 class ModuleSpecList;
+class NativeInterpreter;
 class ObjectContainer;
 class ObjectFile;
 class ObjectFileJITDelegate;
@@ -379,6 +380,7 @@ typedef std::unique_ptr<lldb_private::MemoryRegionInfo> MemoryRegionInfoUP;
 typedef std::shared_ptr<lldb_private::MemoryRegionInfo> MemoryRegionInfoSP;
 typedef std::shared_ptr<lldb_private::Module> ModuleSP;
 typedef std::weak_ptr<lldb_private::Module> ModuleWP;
+typedef std::shared_ptr<lldb_private::NativeInterpreter> NativeInterpreterSP;
 typedef std::shared_ptr<lldb_private::ObjectFile> ObjectFileSP;
 typedef std::shared_ptr<lldb_private::ObjectContainer> ObjectContainerSP;
 typedef std::shared_ptr<lldb_private::ObjectFileJITDelegate>

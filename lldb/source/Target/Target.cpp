@@ -50,6 +50,7 @@
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Language.h"
 #include "lldb/Target/LanguageRuntime.h"
+#include "lldb/Target/NativeInterpreter.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterTypeBuilder.h"
 #include "lldb/Target/SectionLoadList.h"
@@ -3524,6 +3525,19 @@ Status Target::Launch(ProcessLaunchInfo &launch_info, Stream *stream) {
   if (!m_process_sp)
     return Status::FromErrorString("failed to launch or debug process");
 
+  auto module_sp = GetExecutableModule();
+  if (llvm::StringRef(module_sp->GetFileSpec().GetFilename()).contains("python")) {
+    error = InitializeNativeInterpreterPlugin("python");
+    if (!error.Success())
+      return error;
+
+    // Create the breakpoint resolver and save it. We'll use that in the various
+    // CreateBreakpoint to try and stop execution at the right place in the
+    // interpreter. I actually probably need to store it in the target class so
+    // I can find it and pass it to the file/line and name resolvers...
+    // TODO: do the thing
+  }
+
   bool rebroadcast_first_stop =
       !synchronous_execution &&
       launch_info.GetFlags().Test(eLaunchFlagStopAtEntry);
@@ -3790,12 +3804,24 @@ void Target::InvalidateThreadFrameProviders() {
   for (ThreadSP thread_sp : process_sp->Threads()) {
     // Clear frame providers on existing threads so they reload with new config.
     thread_sp->ClearScriptedFrameProvider();
+    // TODO: clear the native interpreted frame provider as well?
     // Notify threads that the stack traces might have changed.
     if (thread_sp->EventTypeHasListeners(Thread::eBroadcastBitStackChanged)) {
       auto data_sp = std::make_shared<Thread::ThreadEventData>(thread_sp);
       thread_sp->BroadcastEvent(Thread::eBroadcastBitStackChanged, data_sp);
     }
   }
+}
+
+Status Target::InitializeNativeInterpreterPlugin(llvm::StringRef which) {
+  m_native_interpreter_sp = NativeInterpreter::CreateInstance(which);
+  if (!m_native_interpreter_sp)
+    return Status::FromErrorStringWithFormat("failed to initialize the native interpreter for %s", which.data());
+  return {};
+}
+
+lldb::NativeInterpreterSP Target::GetNativeInterpreterInstance() {
+  return m_native_interpreter_sp;
 }
 
 void Target::FinalizeFileActions(ProcessLaunchInfo &info) {

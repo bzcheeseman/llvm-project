@@ -592,6 +592,20 @@ public:
   static llvm::SmallVector<InstrumentationRuntimeCallbacks>
   GetInstrumentationRuntimeCallbacks();
 
+  // NativeInterpreter
+  static bool
+  RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
+                 NativeInterpreterCreateInstance create_callback);
+
+  static bool
+  UnregisterPlugin(NativeInterpreterCreateInstance create_callback);
+
+  static NativeInterpreterCreateInstance
+  GetNativeInterpreterCreateCallbackForPluginName(llvm::StringRef name);
+
+  static NativeInterpreterCreateInstance
+  GetNativeInterpreterCreateCallbackAtIndex(uint32_t idx);
+
   // TypeSystem
   static bool RegisterPlugin(llvm::StringRef name, llvm::StringRef description,
                              TypeSystemCreateInstance create_callback,

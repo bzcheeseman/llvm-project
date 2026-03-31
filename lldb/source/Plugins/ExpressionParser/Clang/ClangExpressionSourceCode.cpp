@@ -333,7 +333,7 @@ void ClangExpressionSourceCode::AddLocalVariableDecls(StreamString &stream,
   assert(frame);
   TokenVerifier tokens(expr);
 
-  lldb::VariableListSP var_list_sp = frame->GetInScopeVariableList(false, true);
+  lldb::VariableListSP var_list_sp = frame->GetInScopeVariableList(false, false);
 
   for (size_t i = 0; i < var_list_sp->GetSize(); i++) {
     lldb::VariableSP var_sp = var_list_sp->GetVariableAtIndex(i);

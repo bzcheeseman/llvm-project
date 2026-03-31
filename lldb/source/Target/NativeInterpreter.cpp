@@ -1,0 +1,23 @@
+//===-- NativeInterpreter.cpp ---------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+#include "lldb/Target/NativeInterpreter.h"
+#include "lldb/Core/PluginManager.h"
+
+using namespace lldb;
+using namespace lldb_private;
+
+lldb::NativeInterpreterSP
+NativeInterpreter::CreateInstance(llvm::StringRef interpreter_name) {
+  // Just get the native interpreter plugin for a given name. We prefix with the
+  // lowercase interpreter name to make the plugins easy to discover.
+  auto callback =
+      PluginManager::GetNativeInterpreterCreateCallbackForPluginName(
+          (interpreter_name.lower() + "-NativeInterpreter"));
+  return callback ? callback() : nullptr;
+}

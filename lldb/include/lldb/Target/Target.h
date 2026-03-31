@@ -40,6 +40,7 @@
 #include "lldb/Utility/RealpathPrefixes.h"
 #include "lldb/Utility/StructuredData.h"
 #include "lldb/Utility/Timeout.h"
+#include "lldb/lldb-forward.h"
 #include "lldb/lldb-public.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -823,6 +824,15 @@ protected:
   void InvalidateThreadFrameProviders();
 
 public:
+  /// Create the correct native interpreter plugin for the target. We select
+  /// which one by name (for now).
+  Status InitializeNativeInterpreterPlugin(llvm::StringRef which);
+
+  /// Return any native interpreter plugin that may have been initialized. If
+  /// none was intialized, this will return nullptr as there wasn't such a
+  /// plugin registered for the target.
+  lldb::NativeInterpreterSP GetNativeInterpreterInstance();
+
   // This part handles the breakpoints.
 
   BreakpointList &GetBreakpointList(bool internal = false);
@@ -1835,6 +1845,10 @@ protected:
       m_frame_provider_descriptors;
   mutable std::recursive_mutex m_frame_provider_descriptors_mutex;
   uint32_t m_next_frame_provider_id = 1;
+
+  /// We may have an interpreter plugin for this target. For now, we assume that
+  /// there is only one interpreter at a time.
+  lldb::NativeInterpreterSP m_native_interpreter_sp;
 
   typedef std::map<lldb::LanguageType, lldb::REPLSP> REPLMap;
   REPLMap m_repl_map;
