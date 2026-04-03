@@ -826,7 +826,7 @@ protected:
 public:
   /// Create the correct native interpreter plugin for the target. We select
   /// which one by name (for now).
-  Status InitializeNativeInterpreterPlugin(llvm::StringRef which);
+  Status InitializeNativeInterpreterPlugin(llvm::StringRef which, lldb::ModuleSP module_to_elide);
 
   /// Return any native interpreter plugin that may have been initialized. If
   /// none was intialized, this will return nullptr as there wasn't such a

@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Plugins/NativeInterpreter/Python/FrameProvider.h"
+#include "Plugins/NativeInterpreter/FrameProvider.h"
 #include "lldb/API/SBFrame.h"
 #include "lldb/Core/Module.h"
 #include "lldb/Symbol/Function.h"
@@ -39,7 +39,7 @@ using namespace lldb_private;
 
 namespace {
 // TODO: How do I make it so this is NOT called from within an expression?
-class PythonFrame : public StackFrame {
+class InterpretedFrame : public StackFrame {
 public:
   using StackFrame::StackFrame;
 
@@ -90,7 +90,7 @@ public:
   enum IBIDCallee { eFrameFunction, eFrameLineInfo, eFrameLocalNames };
 
   /// Evaluate the provided IBID callee in the inferior. The IBID callee should
-  /// be of the form `__ibid_<...>`
+  /// be of the form `__ibid_<...>(unsigned)`
   llvm::Expected<lldb::ValueObjectSP> EvaluateIBIDCallee(IBIDCallee callee) {
     EvaluateExpressionOptions options;
     // Set a timeout so we don't wait for locks forever.
@@ -142,7 +142,7 @@ public:
     return frame_info;
   }
 
-  llvm::Expected<std::string> GetPythonFunction() {
+  llvm::Expected<std::string> GetIBIDFunction() {
     auto frame_info_or = EvaluateIBIDCallee(eFrameFunction);
     if (auto err = frame_info_or.takeError())
       return std::move(err);
@@ -151,7 +151,7 @@ public:
     return ReadStringFromInferior(frame_info_or->get());
   }
 
-  llvm::Expected<LineEntry> GetPythonLineInfo() {
+  llvm::Expected<LineEntry> GetIBIDLineInfo() {
     auto frame_info_or = EvaluateIBIDCallee(eFrameLineInfo);
     if (auto err = frame_info_or.takeError())
       return std::move(err);
@@ -180,7 +180,7 @@ public:
     return entry;
   }
 
-  llvm::Expected<std::vector<std::string>> GetPythonLocalNames() {
+  llvm::Expected<std::vector<std::string>> GetIBIDLocalNames() {
     auto locals_or = EvaluateIBIDCallee(eFrameLocalNames);
     if (auto err = locals_or.takeError())
       return std::move(err);
@@ -205,7 +205,7 @@ public:
   }
 
   llvm::Expected<lldb::ValueObjectSP>
-  EvaluatePythonExpression(llvm::StringRef user_expr) {
+  EvaluateIBIDExpression(llvm::StringRef user_expr) {
     EvaluateExpressionOptions options;
     // Set a timeout so we don't wait for locks forever.
     options.SetTimeout(std::chrono::microseconds{1000});
@@ -234,12 +234,12 @@ public:
     return result;
   }
 
-  /// Resolve all the requisite python symbol information.
-  void ResolvePythonSymbolInfo() {
+  /// Resolve all the requisite interpreted symbol information.
+  void ResolveIBIDSymbolInfo() {
     // Resolve the line entry once for each instance of a stack frame. We don't
     // have to resolve it multiple times.
     if (!m_sc.line_entry.IsValid()) {
-      auto lineinfo_or = GetPythonLineInfo();
+      auto lineinfo_or = GetIBIDLineInfo();
       if (auto err = lineinfo_or.takeError())
         LLDB_LOG_ERROR(GetLog(LLDBLog::Target), std::move(err),
                        "resolving line entry: {0}");
@@ -250,7 +250,7 @@ public:
     // Resolve the function name, but only once. It's always the same for any
     // given frame.
     if (m_function_name.empty()) {
-      auto fn_or = GetPythonFunction();
+      auto fn_or = GetIBIDFunction();
       if (auto err = fn_or.takeError())
         LLDB_LOG_ERROR(GetLog(LLDBLog::Target), std::move(err),
                        "resolving function name : {0}");
@@ -260,19 +260,19 @@ public:
   }
 
   const char *GetFunctionName() override {
-    // Resolve all the python symbol information.
-    ResolvePythonSymbolInfo();
+    // Resolve all the interpreted symbol information.
+    ResolveIBIDSymbolInfo();
     return m_function_name.c_str();
   }
 
   const char *GetDisplayFunctionName() override { return GetFunctionName(); }
 
-  void PopulatePythonFrameLocals() {
+  void PopulateIBIDFrameLocals() {
     // This is *EXTREMELY* expensive, so don't do it often.
     if (m_frame_locals_sp->GetSize() != 0)
       return;
 
-    auto local_names_or = GetPythonLocalNames();
+    auto local_names_or = GetIBIDLocalNames();
     if (auto err = local_names_or.takeError()) {
       LLDB_LOG_ERROR(GetLog(LLDBLog::Target), std::move(err),
                      "getting local variable names: {0}");
@@ -281,7 +281,7 @@ public:
 
     m_frame_locals_sp.reset(new ValueObjectList());
     for (llvm::StringRef name : *local_names_or) {
-      auto result_or = EvaluatePythonExpression(name);
+      auto result_or = EvaluateIBIDExpression(name);
       if (auto err = result_or.takeError()) {
         LLDB_LOG_ERROR(GetLog(LLDBLog::Target), std::move(err),
                        "getting value for local variable {1}: {0}", name);
@@ -295,7 +295,7 @@ public:
   }
 
   void PopulateVariableList() {
-    PopulatePythonFrameLocals();
+    PopulateIBIDFrameLocals();
     if (!m_frame_locals_sp)
       return;
 
@@ -379,7 +379,7 @@ public:
     LLDB_LOG(GetLog(LLDBLog::Target), "attempting to run expression {0}",
              var_expr);
     // Evaluate the user expression.
-    auto result_or = EvaluatePythonExpression(var_expr);
+    auto result_or = EvaluateIBIDExpression(var_expr);
     if (auto err = result_or.takeError()) {
       error.FromError(std::move(err));
       return nullptr;
@@ -418,25 +418,29 @@ public:
 };
 
 // LLVM RTTI support.
-char PythonFrame::ID;
+char InterpretedFrame::ID;
 } // namespace
 
 llvm::Expected<lldb::SyntheticFrameProviderSP>
-PythonFrameProvider::CreateInstance(lldb::StackFrameListSP input_frames) {
+InterpretedFrameProvider::CreateInstance(lldb::StackFrameListSP input_frames,
+                                         lldb::ModuleSP module_to_elide) {
   if (!input_frames)
     return llvm::createStringError(
-        "failed to create python frame provider: invalid input frames");
+        "failed to create interpreted frame provider: invalid input frames");
 
-  return std::make_shared<PythonFrameProvider>(input_frames);
+  return std::make_shared<InterpretedFrameProvider>(input_frames,
+                                                    std::move(module_to_elide));
 }
 
-std::string PythonFrameProvider::GetDescription() const {
+std::string InterpretedFrameProvider::GetDescription() const {
   // TODO
-  return "python frame provider";
+  return "interpreted frame provider";
 }
 
-PythonFrameProvider::PythonFrameProvider(lldb::StackFrameListSP input_frames)
-    : SyntheticFrameProvider(input_frames) {
+InterpretedFrameProvider::InterpretedFrameProvider(
+    lldb::StackFrameListSP input_frames, lldb::ModuleSP module_to_elide)
+    : SyntheticFrameProvider(input_frames),
+      m_module_to_elide(std::move(module_to_elide)) {
   auto &target = GetThread().GetProcess()->GetTarget();
   (void)target;
 
@@ -445,69 +449,62 @@ PythonFrameProvider::PythonFrameProvider(lldb::StackFrameListSP input_frames)
   //       should I do that in the plugin?
 }
 
-unsigned
-PythonFrameProvider::GetNumPythonFrames(lldb::StackFrameSP anchor_frame) {
-  // Save the current number of python frames per-stop. This works because the
-  // provider is re-constructed at every stop point.
-  if (m_num_python_frames != 0)
-    return m_num_python_frames;
+unsigned InterpretedFrameProvider::GetNumInterpretedFrames(
+    lldb::StackFrameSP anchor_frame) {
+  // Save the current number of interpreted frames per-stop. This works because
+  // the provider is re-constructed at every stop point.
+  if (m_num_interpreted_frames != 0)
+    return m_num_interpreted_frames;
 
   lldb::VariableSP var;
   Status err;
   // Make sure to call the *base* stack frame method. We use eNoDynamicValues
   // because it looks like if we allow dynamic values it causes us to construct
-  // an execution context, which re-constructs the frame list. That said, looks
-  // like eNoDynamicValues does the same thing...
+  // an execution context, which re-constructs the frame list. We do the same
+  // thing with the prefix `::` namespace specifier - it causes DIL to avoid
+  // getting the variable list using the frame, which would call all this code
+  // all over again in a recursion that causes a deadlock.
   auto val_sp = anchor_frame->StackFrame::GetValueForVariableExpressionPath(
-      "__ibid_num_frames", lldb::eNoDynamicValues, 0, var, err);
+      "::__ibid_num_frames", lldb::eNoDynamicValues, 0, var, err);
   assert(val_sp);
-  m_num_python_frames = val_sp->GetValueAsUnsigned(0);
-  LLDB_LOG(GetLog(LLDBLog::Target), "Found {0} python frames",
-           m_num_python_frames);
-  return m_num_python_frames;
+  m_num_interpreted_frames = val_sp->GetValueAsUnsigned(0);
+  LLDB_LOG(GetLog(LLDBLog::Target), "Found {0} interpreted frames",
+           m_num_interpreted_frames);
+  return m_num_interpreted_frames;
 }
 
 llvm::Expected<lldb::StackFrameSP>
-PythonFrameProvider::GetFrameAtIndex(uint32_t idx) {
+InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
   // Get the *concrete* frame at this index. This will call into the unwinder
-  // (in theory). If the concrete frame here isn't in the python interpreter,
-  // return it. If it *is* in the python interpreter, then we want to replace it
-  // with the actual python frames.
+  // (in theory). If the concrete frame here isn't in the interpreter,
+  // return it. If it *is* in the interpreter, then we want to replace it
+  // with the actual interpreted frames.
   auto frame_at_index_sp = m_input_frames->GetFrameAtIndex(idx);
-  if (frame_at_index_sp && !llvm::isa<PythonFrame>(frame_at_index_sp.get())) {
+  if (frame_at_index_sp &&
+      !llvm::isa<InterpretedFrame>(frame_at_index_sp.get())) {
     auto &frame_sc = frame_at_index_sp->GetSymbolContext(
         lldb::eSymbolContextModule | lldb::eSymbolContextFunction);
-    // If this is the debugger anchor function, populate the number of python
-    // frames from it.
+    // If this is the debugger anchor function, populate the number of
+    // interpreted frames from it.
     if (llvm::StringRef(frame_sc.GetFunctionName())
             .contains("__ibid_debugger_anchor")) {
-      (void)GetNumPythonFrames(frame_at_index_sp);
+      (void)GetNumInterpretedFrames(frame_at_index_sp);
     }
     // Then, decide if the frame should be elided.
     if (frame_sc.module_sp) {
-      auto file = frame_sc.module_sp->GetObjectFile()->GetFileSpec();
-      llvm::StringRef file_path{file.GetPathAsConstString()};
-      // This only works because we pre-populate (and then save) the number of
-      // python frames at the anchor frame. If we didn't do that, we'd call
-      // GetNumPythonFrames from within this function (from within
-      // GetFrameWithStackID). The issue is that GetFrameWithStackID isn't
-      // really recursion-safe. We're trying to restore the thread state after
-      // the expression ran, and that's causing headaches because that calls
-      // GetFrameWithStackID, which calls FetchFramesUpTo, which calls this
-      // function (and) GetNumPythonFrames, which goes into ValueObject ->
-      // ExecutionContext -> GetFrameWithStackID and we hit a deadlock because
-      // FetchFramesUpTo holds a write lock that GetFrameWithStackID tries to
-      // take. Basically, we have to avoid re-constructing the frame list from
-      // within this function if we're running an expression in one of the
-      // frames.
-      if (!(file_path.ends_with("Python"))) {
+      // If the frame's module is inside the module we're trying to elide, then
+      // elide it - but only if it's within that object file. This is important
+      // for things like extensions that would be dynamically loaded!
+      // TODO: In theory.......in practice it looks like even stuff loaded by
+      // python is getting elided, which we gotta figure out how to avoid
+      if (frame_sc.module_sp == m_module_to_elide) {
         m_index_offset = idx + 1;
         return frame_at_index_sp;
       }
     }
   } else {
     // If we can't get *anything* from this, then use the zeroth frame to figure
-    // out how many python frames there are.
+    // out how many interpreted frames there are.
     frame_at_index_sp = m_input_frames->GetFrameWithConcreteFrameIndex(0);
   }
 
@@ -518,9 +515,9 @@ PythonFrameProvider::GetFrameAtIndex(uint32_t idx) {
   // Now we have the concrete frame. Let's use that to produce the rest of the
   // frame info.
 
-  // Now, we're in the anchor so we can figure out how many python frames
+  // Now, we're in the anchor so we can figure out how many interpreted frames
   // there actually *are*.
-  unsigned num_frames = GetNumPythonFrames(frame_at_index_sp);
+  unsigned num_frames = GetNumInterpretedFrames(frame_at_index_sp);
   if (idx - m_index_offset >= num_frames)
     return llvm::createStringError("");
 
@@ -539,16 +536,16 @@ PythonFrameProvider::GetFrameAtIndex(uint32_t idx) {
   SymbolContext sc;
   sc.target_sp = target_sp;
 
-  // Set up the python frame using the StackFrame constructor.
-  auto py_frame = std::make_shared<PythonFrame>(
+  // Set up the interpreted frame using the StackFrame constructor.
+  auto interpreted_frame = std::make_shared<InterpretedFrame>(
       thread_sp, idx, idx, cfa, cfa_is_valid, LLDB_INVALID_ADDRESS,
       StackFrame::Kind::Synthetic, artificial, behaves_like_zeroth_frame, &sc);
 
   // Then populate the various stuff we need to call into the inferior to
   // get information *about* the frame.
-  py_frame->target_sp = target_sp;
-  py_frame->process_sp = process_sp;
-  py_frame->frame_sp = frame_at_index_sp;
-  py_frame->m_index_offset = m_index_offset;
-  return py_frame;
+  interpreted_frame->target_sp = target_sp;
+  interpreted_frame->process_sp = process_sp;
+  interpreted_frame->frame_sp = frame_at_index_sp;
+  interpreted_frame->m_index_offset = m_index_offset;
+  return interpreted_frame;
 }

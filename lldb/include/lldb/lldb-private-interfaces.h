@@ -129,7 +129,8 @@ typedef lldb::MemoryHistorySP (*MemoryHistoryCreateInstance)(
 typedef lldb::InstrumentationRuntimeType (*InstrumentationRuntimeGetType)();
 typedef lldb::InstrumentationRuntimeSP (*InstrumentationRuntimeCreateInstance)(
     const lldb::ProcessSP &process_sp);
-typedef lldb::NativeInterpreterSP (*NativeInterpreterCreateInstance)();
+typedef lldb::NativeInterpreterSP (*NativeInterpreterCreateInstance)(
+    lldb::ModuleSP module_to_elide);
 typedef lldb::TypeSystemSP (*TypeSystemCreateInstance)(
     lldb::LanguageType language, Module *module, Target *target);
 typedef lldb::REPLSP (*REPLCreateInstance)(Status &error,

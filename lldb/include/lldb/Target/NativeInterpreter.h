@@ -15,7 +15,7 @@ class NativeInterpreter : public PluginInterface {
 public:
   /// Create an instance of the native interpreter plugin for the provided name,
   /// e.g. "python". If no such plugin is provided, then we won't do anything.
-  static lldb::NativeInterpreterSP CreateInstance(llvm::StringRef interpreter_name);
+  static lldb::NativeInterpreterSP CreateInstance(llvm::StringRef interpreter_name, lldb::ModuleSP module_to_elide);
 
   /// An implementation of this plugin will be able to provide a
   /// SyntheticFrameProvider that can be used to provide interpreter frames.

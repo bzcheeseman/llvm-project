@@ -69,6 +69,7 @@
 #include "lldb/Utility/State.h"
 #include "lldb/Utility/StreamString.h"
 #include "lldb/Utility/Timer.h"
+#include "lldb/lldb-forward.h"
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SetVector.h"
@@ -3527,7 +3528,7 @@ Status Target::Launch(ProcessLaunchInfo &launch_info, Stream *stream) {
 
   auto module_sp = GetExecutableModule();
   if (llvm::StringRef(module_sp->GetFileSpec().GetFilename()).contains("python")) {
-    error = InitializeNativeInterpreterPlugin("python");
+    error = InitializeNativeInterpreterPlugin("ibid", module_sp);
     if (!error.Success())
       return error;
 
@@ -3813,8 +3814,8 @@ void Target::InvalidateThreadFrameProviders() {
   }
 }
 
-Status Target::InitializeNativeInterpreterPlugin(llvm::StringRef which) {
-  m_native_interpreter_sp = NativeInterpreter::CreateInstance(which);
+Status Target::InitializeNativeInterpreterPlugin(llvm::StringRef which, lldb::ModuleSP module_to_elide) {
+  m_native_interpreter_sp = NativeInterpreter::CreateInstance(which, module_to_elide);
   if (!m_native_interpreter_sp)
     return Status::FromErrorStringWithFormat("failed to initialize the native interpreter for %s", which.data());
   return {};
