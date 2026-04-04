@@ -379,19 +379,16 @@ bool BreakpointLocation::ValidForThisThread(Thread &thread) {
 
 BreakpointLocationSP
 BreakpointLocation::WasHit(StoppointCallbackContext *context) {
-  // Only the BreakpointResolverScripted provides WasHit.
+  // All resolvers provide WasHit - the default is to simply return the input
+  // location.
   BreakpointResolverSP resolver_sp = GetBreakpoint().GetResolver();
-  BreakpointResolverScripted *scripted =
-      llvm::dyn_cast<BreakpointResolverScripted>(resolver_sp.get());
-  if (!scripted)
-    return shared_from_this();
-
   StackFrameSP frame_sp = context->exe_ctx_ref.GetFrameSP();
   if (!frame_sp)
     return shared_from_this();
 
   BreakpointLocationSP return_loc_sp =
-      scripted->WasHit(frame_sp, shared_from_this());
+      resolver_sp->WasHit(frame_sp, shared_from_this());
+
   // If this is a facade location, then we won't have bumped its hit count
   // while processing the original location hit.  Do so here.  We don't need
   // to bump the breakpoint's hit count, however, since hitting the real

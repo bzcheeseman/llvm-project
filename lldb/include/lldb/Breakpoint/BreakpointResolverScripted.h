@@ -46,7 +46,7 @@ public:
   void GetDescription(Stream *s) override;
 
   lldb::BreakpointLocationSP WasHit(lldb::StackFrameSP frame_sp,
-                                    lldb::BreakpointLocationSP bp_loc_sp);
+                                    lldb::BreakpointLocationSP bp_loc_sp) override;
 
   std::optional<std::string>
   GetLocationDescription(lldb::BreakpointLocationSP bp_loc_sp,

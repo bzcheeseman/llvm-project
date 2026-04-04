@@ -146,6 +146,14 @@ public:
   /// for any other purpose, as the values may change as LLDB evolves.
   unsigned getResolverID() const { return SubclassID; }
 
+  /// Provide a WasHit callback for any breakpoint resolver. By default,
+  /// breakpoints are always 'hit', except for when we're dealing with scripted
+  /// breakpoints or breakpoints in interpreted code.
+  virtual lldb::BreakpointLocationSP
+  WasHit(lldb::StackFrameSP frame_sp, lldb::BreakpointLocationSP bp_loc_sp) {
+    return bp_loc_sp;
+  }
+
   enum ResolverTy GetResolverTy() {
     if (SubclassID > ResolverTy::LastKnownResolverType)
       return ResolverTy::UnknownResolver;
