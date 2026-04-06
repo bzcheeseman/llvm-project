@@ -287,7 +287,7 @@ __ibid_evaluate_expression_in_frame(unsigned idx, const char *expr) {
   return frame.valueCache[exprKey].c_str();
 }
 
-Py_EXPORTED_SYMBOL extern "C" void __ibid_debugger_anchor(unsigned num_frames) {
+Py_EXPORTED_SYMBOL extern "C" void __ibid_debugger_trace_anchor(unsigned num_frames) {
   auto nf = num_frames + 1;
   (void)nf;
   return;
@@ -369,7 +369,7 @@ static PyObject *ProgramState_call(ProgramState *self, PyObject *args,
   __ibid_num_frames = g_state->current_frames.size();
 
   // Set the __ibid_debugger_anchor so the debugger knows where to pause.
-  __ibid_debugger_anchor(__ibid_num_frames);
+  __ibid_debugger_trace_anchor(__ibid_num_frames);
 
   // Return ourselves.
   Py_INCREF(self);

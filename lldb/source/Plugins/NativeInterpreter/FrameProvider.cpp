@@ -487,7 +487,7 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
     // If this is the debugger anchor function, populate the number of
     // interpreted frames from it.
     if (llvm::StringRef(frame_sc.GetFunctionName())
-            .contains("__ibid_debugger_anchor")) {
+            .contains("__ibid_debugger_trace_anchor")) {
       (void)GetNumInterpretedFrames(frame_at_index_sp);
     }
     // Then, decide if the frame should be elided.
