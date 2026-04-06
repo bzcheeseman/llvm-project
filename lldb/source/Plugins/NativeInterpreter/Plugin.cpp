@@ -1,12 +1,13 @@
 #include "lldb/Target/NativeInterpreter.h"
 
+#include "BreakpointResolver.h"
 #include "FrameProvider.h"
-// #include "BreakpointResolver.h"
 
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Symbol/Function.h"
 #include "lldb/Target/Target.h"
+#include "lldb/Utility/FileSpec.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
 #include "lldb/lldb-enumerations.h"
@@ -20,7 +21,12 @@ namespace {
 class IBIDInterpreterPlugin : public NativeInterpreter {
 public:
   IBIDInterpreterPlugin(lldb::ModuleSP module_to_elide)
-      : m_module_to_elide(std::move(module_to_elide)) {}
+      : m_module_to_elide(std::move(module_to_elide)) {
+    // TODO: We can use this:
+    // https://docs.python.org/3.14/howto/remote_debugging.html#remote-debugging
+    // to add our tracer to the interpreter state at process attach so the user
+    // doesn't have to (but only for python, obviously)
+  }
 
   static void Initialize() {
     PluginManager::RegisterPlugin(
@@ -55,25 +61,27 @@ public:
     return *frame_provider_sp_or;
   }
 
-  lldb::BreakpointSP
-  CreateAnchorBreakpoint(lldb_private::Target &target,
-                         lldb_private::BreakpointResolver &resolver) override {
-    auto module_sp = target.GetExecutableModule();
-
-    const auto *symbol = module_sp->FindFirstSymbolWithNameAndType(
-        ConstString{"__ibid_debugger_anchor"}, lldb::eSymbolTypeCode);
-    if (!symbol)
+  /// An implementation of this plugin will be able to provide a
+  /// BreakpointResolver that can be used to resolve interpreter breakpoints for
+  /// a given function name.
+  lldb::BreakpointResolverSP GetBreakpointResolverForFunctionNames(
+      const lldb::BreakpointSP &bkpt,
+      std::vector<std::string> function_names) override {
+    if (function_names.empty())
       return nullptr;
-
-    // This works (and we don't need to skip the prologue) because we don't
-    // actually need anything *inside* the function - we can just break as soon
-    // as we hit it.
-    return target.CreateBreakpoint(symbol->GetAddress(), true, false);
+    return std::make_shared<InterpretedBreakpointResolver>(
+        bkpt, std::move(function_names), FileSpec{}, 0, 0);
   }
 
+  /// An implementation of this plugin will be able to provide a
+  /// BreakpointResolver that can be used to resolve interpreter breakpoints for
+  /// a given file/line/col location.
   lldb::BreakpointResolverSP
-  GetBreakpointResolver(lldb::ThreadSP thread) override {
-    return nullptr;
+  GetBreakpointResolverForSourceLoc(const lldb::BreakpointSP &bkpt,
+                                    FileSpec file, unsigned line,
+                                    unsigned col = 0) override {
+    return std::make_shared<InterpretedBreakpointResolver>(
+        bkpt, std::vector<std::string>{}, file, line, col);
   }
 
 private:
@@ -87,7 +95,5 @@ void lldb_initialize_NativeInterpreter() {
   IBIDInterpreterPlugin::Initialize();
 }
 
-void lldb_terminate_NativeInterpreter() {
-  IBIDInterpreterPlugin::Terminate();
-}
+void lldb_terminate_NativeInterpreter() { IBIDInterpreterPlugin::Terminate(); }
 } // namespace lldb_private

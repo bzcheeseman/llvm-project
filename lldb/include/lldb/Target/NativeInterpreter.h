@@ -15,18 +15,30 @@ class NativeInterpreter : public PluginInterface {
 public:
   /// Create an instance of the native interpreter plugin for the provided name,
   /// e.g. "python". If no such plugin is provided, then we won't do anything.
-  static lldb::NativeInterpreterSP CreateInstance(llvm::StringRef interpreter_name, lldb::ModuleSP module_to_elide);
+  static lldb::NativeInterpreterSP
+  CreateInstance(llvm::StringRef interpreter_name,
+                 lldb::ModuleSP module_to_elide);
 
   /// An implementation of this plugin will be able to provide a
   /// SyntheticFrameProvider that can be used to provide interpreter frames.
   virtual lldb::SyntheticFrameProviderSP
   GetFrameProvider(lldb::StackFrameListSP frame_list) = 0;
 
-  /// Create an anchor breakpoint.
-  virtual lldb::BreakpointSP CreateAnchorBreakpoint(lldb_private::Target &target, lldb_private::BreakpointResolver &resolver) = 0;
+  /// An implementation of this plugin will be able to provide a
+  /// BreakpointResolver that can be used to resolve interpreter breakpoints for
+  /// one of a set of function names.
+  virtual lldb::BreakpointResolverSP
+  GetBreakpointResolverForFunctionNames(const lldb::BreakpointSP &bkpt,
+                                       std::vector<std::string> function_names) = 0;
 
   /// An implementation of this plugin will be able to provide a
-  /// BreakpointResolver that can be used to resolve interpreter breakpoints.
-  virtual lldb::BreakpointResolverSP GetBreakpointResolver(lldb::ThreadSP) = 0;
+  /// BreakpointResolver that can be used to resolve interpreter breakpoints for
+  /// a given file/line/col location. If the column is provided, we match on
+  /// file + line + col, otherwise just file + col. If the filename is an
+  /// absolute path, then we match on the full path, otherwise we match on just
+  /// the filename.
+  virtual lldb::BreakpointResolverSP
+  GetBreakpointResolverForSourceLoc(const lldb::BreakpointSP &bkpt, FileSpec file,
+                                    unsigned line, unsigned col) = 0;
 };
 } // namespace lldb_private

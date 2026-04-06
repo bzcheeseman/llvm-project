@@ -133,7 +133,8 @@ public:
     FileRegexResolver,
     PythonResolver,
     ExceptionResolver,
-    LastKnownResolverType = ExceptionResolver,
+    InterpreterResolver,
+    LastKnownResolverType = InterpreterResolver,
     UnknownResolver
   };
 

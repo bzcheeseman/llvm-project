@@ -496,6 +496,15 @@ BreakpointSP Target::CreateBreakpoint(const FileSpecList *containingModules,
                                       LazyBool skip_prologue, bool internal,
                                       bool hardware,
                                       LazyBool move_to_nearest_code) {
+  if (GetNativeInterpreterInstance()) {
+    lldb::SearchFilterSP filter_sp = std::make_shared<SearchFilterForUnconstrainedSearches>(shared_from_this());
+    auto resolver_sp =
+        m_native_interpreter_sp->GetBreakpointResolverForSourceLoc(
+            lldb::BreakpointSP{}, file, line_no, column);
+    // TODO: Need a combined resolver that can compose other resolvers.
+    return CreateBreakpoint(filter_sp, resolver_sp, internal, hardware, true);
+  }
+
   FileSpec remapped_file;
   std::optional<llvm::StringRef> removed_prefix_opt =
       GetSourcePathMap().ReverseRemapPath(file, remapped_file);
@@ -632,6 +641,15 @@ Target::CreateBreakpoint(const FileSpecList *containingModules,
       skip_prologue = GetSkipPrologue() ? eLazyBoolYes : eLazyBoolNo;
     if (language == lldb::eLanguageTypeUnknown)
       language = GetLanguage().AsLanguageType();
+
+    if (m_native_interpreter_sp) {
+      llvm::errs() << "HELLO FROM TARGET (fn name)\n";
+      auto resolver_sp =
+          m_native_interpreter_sp->GetBreakpointResolverForFunctionNames(
+              nullptr, func_names);
+      // TODO: Need a combined resolver that can compose other resolvers.
+      return CreateBreakpoint(filter_sp, resolver_sp, internal, hardware, true);
+    }
 
     BreakpointResolverSP resolver_sp(
         new BreakpointResolverName(nullptr, func_names, func_name_type_mask,
@@ -3531,12 +3549,6 @@ Status Target::Launch(ProcessLaunchInfo &launch_info, Stream *stream) {
     error = InitializeNativeInterpreterPlugin("ibid", module_sp);
     if (!error.Success())
       return error;
-
-    // Create the breakpoint resolver and save it. We'll use that in the various
-    // CreateBreakpoint to try and stop execution at the right place in the
-    // interpreter. I actually probably need to store it in the target class so
-    // I can find it and pass it to the file/line and name resolvers...
-    // TODO: do the thing
   }
 
   bool rebroadcast_first_stop =

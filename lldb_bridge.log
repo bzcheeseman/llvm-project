@@ -1,0 +1,25 @@
+found 2 locals
+updating cache with a = 1
+updating cache with b = 2
+finished with populate_frame_locals
+found 2 locals
+updating cache with a = 5
+updating cache with b = 2
+finished with populate_frame_locals
+found 2 locals
+updating cache with a = 1
+updating cache with b = 2
+finished with populate_frame_locals
+found 2 locals
+updating cache with a = 5
+updating cache with b = 2
+finished with populate_frame_locals
+fffound 2 locals
+updating cache with a = 1
+updating cache with b = 2
+finished with populate_frame_locals
+running expression `a + 13`
+found 2 locals
+updating cache with a = 1
+updating cache with b = 2
+finished with populate_frame_locals

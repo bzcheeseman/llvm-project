@@ -1577,12 +1577,14 @@ StackFrameListSP Thread::GetStackFrameList() {
       //
       // Since we're the first provider, we don't have to worry about chaining
       // them.
-
-      // TODO: Somehow, this isn't triggering until *after* we do a step or
-      // something, why not? Is it because we don't have m_prev_frames_sp?
       if (auto native_interp_plugin = target.GetNativeInterpreterInstance()) {
+        // We manually construct a frame list for the frame provider right here
+        // - this is how we handle the case where m_prev_frames_sp is empty. We
+        // always get unwinder frames.
+        auto provider_input_frames =
+            std::make_shared<StackFrameList>(*this, m_prev_frames_sp, true);
         if (auto provider =
-                native_interp_plugin->GetFrameProvider(m_prev_frames_sp))
+                native_interp_plugin->GetFrameProvider(std::move(provider_input_frames)))
           m_frame_providers.push_back(std::move(provider));
       }
 
