@@ -51,144 +51,142 @@ public:
   }
   static bool classof(const StackFrame *obj) { return obj->isA(&ID); }
 
-  // TODO: I would prefer to overload GetSymbolContext to provide the line info.
-  // However, I can't do that because that is called from the expression
-  // evaluator, which in turn causes deadlocks. I tried the version that just
-  // reads globals, but for some reason that worked very poorly.
-
-  llvm::Expected<std::string>
-  ReadStringFromInferior(lldb_private::ValueObject *valobj) {
-    // nullptr isn't necessarily an error - just empty string.
-    if (valobj->GetValueAsUnsigned(0xcafe) == 0) {
-      return "";
+  /// Overload GetSymbolContext so that if the line entry was requested, we can
+  /// fetch it from the inferior and resolve it before handing off to the base
+  /// implementation.
+  const SymbolContext &
+  GetSymbolContext(lldb::SymbolContextItem resolve_scope) override {
+    // If the line entry was requested, resolve that from our global variable.
+    if (resolve_scope & lldb::eSymbolContextLineEntry) {
+      // Only reset the line entry if we have to.
+      if (!m_flags.Test(lldb::eSymbolContextLineEntry)) {
+        auto line_entry_or = GetIBIDLineInfo();
+        if (auto err = line_entry_or.takeError()) {
+          LLDB_LOG_ERROR(GetLog(LLDBLog::Target), std::move(err),
+                         "while getting interpreted line info: {0}");
+        } else {
+          // No error, so set the line entry and set the bit that says we did
+          // it.
+          m_sc.line_entry = *line_entry_or;
+          m_flags.Set(lldb::eSymbolContextLineEntry);
+        }
+      }
     }
 
-    // Construct a memory buffer.
+    return StackFrame::GetSymbolContext(resolve_scope);
+  }
+
+  /// Read an __ibid_string from the inferior. The string is a struct with data
+  /// and length.
+  llvm::Expected<std::string>
+  ReadIBIDStringFromInferior(lldb_private::ValueObject *valobj) {
+    auto len_sp = valobj->GetChildMemberWithName("len");
+    if (!len_sp)
+      return llvm::createStringError("no `len` child member");
+
+    auto data_sp = valobj->GetChildMemberWithName("data");
+    if (!data_sp)
+      return llvm::createStringError("no `data` child member");
+
+    unsigned length = len_sp->GetValueAsUnsigned(0);
+
+    // Zero length or nullptr isn't an error, it means empty string.
+    if (length == 0 || data_sp->GetValueAsUnsigned(0) == 0)
+      return "";
+
+    // Construct a memory buffer on this side with the correct length.
     lldb::WritableDataBufferSP buffer_sp =
-        std::make_shared<lldb_private::DataBufferHeap>(128, '\0');
+        std::make_shared<lldb_private::DataBufferHeap>(length, '\0');
     Status s;
-    auto [len, was_truncated] = valobj->ReadPointedString(buffer_sp, s, false);
+    auto [len, was_truncated] = data_sp->ReadPointedString(buffer_sp, s, false);
     if (!s.Success())
       return s.takeError();
 
-    if (was_truncated) {
-      // Make a larger memory buffer and try again if the string was truncated.
-      buffer_sp = std::make_shared<lldb_private::DataBufferHeap>(1024, '\0');
-      auto [upd_len, _] = valobj->ReadPointedString(buffer_sp, s, false);
-      if (!s.Success())
-        return s.takeError();
-      len = upd_len;
-    }
+    assert(!was_truncated);
 
-    // And construct a string with it. We have to get the length via strlen (we
-    // know it's null-terminated) lest it contain garbage at the end.
-    size_t string_length = strnlen((const char *)buffer_sp->GetBytes(), len);
-    std::string out{(const char *)buffer_sp->GetBytes(), string_length};
-    LLDB_LOG(GetLog(LLDBLog::Target), "read string \"{0}\" from the inferior",
-             out);
+    // And construct an std::string with it.
+    std::string out{(const char *)buffer_sp->GetBytes(), length};
+    LLDB_LOG(GetLog(LLDBLog::Target),
+             "read string \"{0}\" (len: {1}) from the inferior", out, length);
     return out;
   }
 
-  enum IBIDCallee { eFrameFunction, eFrameLineInfo, eFrameLocalNames };
+  llvm::Expected<std::string> GetIBIDFunction() {
+    auto fn_name_sp = frame_info_sp->GetChildMemberWithName("function");
+    if (!fn_name_sp) {
+      return llvm::createStringError("no child member named function");
+    }
+    // Read the value from memory. That's the function.
+    return ReadIBIDStringFromInferior(fn_name_sp.get());
+  }
 
-  /// Evaluate the provided IBID callee in the inferior. The IBID callee should
-  /// be of the form `__ibid_<...>(unsigned)`
-  llvm::Expected<lldb::ValueObjectSP> EvaluateIBIDCallee(IBIDCallee callee) {
+  llvm::Expected<LineEntry> GetIBIDLineInfo() {
+    auto filename_sp = frame_info_sp->GetChildMemberWithName("filename");
+    if (!filename_sp) {
+      return llvm::createStringError("no child member named filename");
+    }
+    // Read the value from memory.
+    auto string_or = ReadIBIDStringFromInferior(filename_sp.get());
+    if (auto err = string_or.takeError())
+      return err;
+
+    auto line_sp = frame_info_sp->GetChildMemberWithName("line");
+    if (!line_sp) {
+      return llvm::createStringError("no child member named line");
+    }
+    auto col_sp = frame_info_sp->GetChildMemberWithName("column");
+    if (!col_sp) {
+      return llvm::createStringError("no child member named column");
+    }
+
+    LineEntry entry;
+    entry.file_sp =
+        std::make_shared<lldb_private::SupportFile>(FileSpec{*string_or});
+    entry.line = line_sp->GetValueAsUnsigned(0);
+    entry.column = col_sp->GetValueAsUnsigned(0);
+    entry.synthetic = true;
+    return entry;
+  }
+
+  llvm::Expected<lldb::ValueObjectSP> DoEvaluateExpression(std::string expr) {
+    LLDB_LOG(GetLog(LLDBLog::Target), "evaluating expression `{0}`", expr);
+
     EvaluateExpressionOptions options;
     // Set a timeout so we don't wait for locks forever.
-    options.SetTimeout(std::chrono::microseconds{1000});
+    options.SetTimeout(std::chrono::milliseconds{10});
     // Don't unwind on error and ignore breakpoints.
     options.SetUnwindOnError(false);
     options.SetIgnoreBreakpoints(true);
     // The language for these expressions is always going to be C.
     options.SetLanguage(lldb::eLanguageTypeC11);
-    // And we specifically don't want to run the target if we can avoid it.
     options.SetUseDynamic(lldb::eDynamicDontRunTarget);
 
-    lldb::ValueObjectSP frame_info;
-    // NOTE: DO NOT use GetFrameIndex here - that causes an infinite recursive
-    // loop where we attempt to construct frame providers/etc. Use m_frame_index
-    // here instead.
-    std::string expr;
-    switch (callee) {
-    case eFrameFunction: {
-      expr = llvm::formatv("__ibid_get_frame_function({0})",
-                           m_frame_index - m_index_offset)
-                 .str();
-      break;
-    }
-    case eFrameLineInfo: {
-      expr = llvm::formatv("__ibid_get_frame_line_info({0})",
-                           m_frame_index - m_index_offset)
-                 .str();
-      break;
-    }
-    case eFrameLocalNames: {
-      expr = llvm::formatv("__ibid_get_frame_local_names({0})",
-                           m_frame_index - m_index_offset)
-                 .str();
-      break;
-    }
-    }
-
-    LLDB_LOG(GetLog(LLDBLog::Target), "evaluating expression `{0}`", expr);
-
+    lldb::ValueObjectSP out;
     // Evaluate the expression in the context of the process. Hopefully that'll
     // choose a thread other than this current one(?)
-    auto result = target_sp->EvaluateExpression(expr, frame_sp.get(),
-                                                frame_info, options);
+    auto result =
+        target_sp->EvaluateExpression(expr, frame_sp.get(), out, options);
     if (result != eExpressionCompleted) {
       return llvm::createStringError("expression `" + expr +
                                      "` failed: " + llvm::Twine(result));
     }
-    return frame_info;
-  }
 
-  llvm::Expected<std::string> GetIBIDFunction() {
-    auto frame_info_or = EvaluateIBIDCallee(eFrameFunction);
-    if (auto err = frame_info_or.takeError())
-      return std::move(err);
-
-    // Read the value from memory. That's the function.
-    return ReadStringFromInferior(frame_info_or->get());
-  }
-
-  llvm::Expected<LineEntry> GetIBIDLineInfo() {
-    auto frame_info_or = EvaluateIBIDCallee(eFrameLineInfo);
-    if (auto err = frame_info_or.takeError())
-      return std::move(err);
-
-    // Read the value from memory.
-    auto string_or = ReadStringFromInferior(frame_info_or->get());
-    if (auto err = string_or.takeError())
-      return err;
-
-    // Now, parse the string.
-    auto json = llvm::json::parse(*string_or);
-    if (auto err = json.takeError())
-      return err;
-
-    auto *obj = json->getAsObject();
-    auto filename = obj->getString("filename");
-    auto line = obj->getInteger("line");
-    auto col = obj->getInteger("col");
-
-    LineEntry entry;
-    entry.file_sp = std::make_shared<lldb_private::SupportFile>(
-        FileSpec{filename.value_or("unknown")});
-    entry.line = line.value_or(0);
-    entry.column = col.value_or(0);
-    entry.synthetic = true;
-    return entry;
+    return out;
   }
 
   llvm::Expected<std::vector<std::string>> GetIBIDLocalNames() {
-    auto locals_or = EvaluateIBIDCallee(eFrameLocalNames);
+    // NOTE: DO NOT use GetFrameIndex here - that causes an infinite recursive
+    // loop where we attempt to construct frame providers/etc. Use m_frame_index
+    // here instead.
+    std::string expr = llvm::formatv("__ibid_get_frame_local_names({0})",
+                                     m_frame_index - m_index_offset);
+
+    auto locals_or = DoEvaluateExpression(expr);
     if (auto err = locals_or.takeError())
-      return std::move(err);
+      return err;
 
     // Read the value from memory.
-    auto string_or = ReadStringFromInferior(locals_or->get());
+    auto string_or = ReadIBIDStringFromInferior(locals_or->get());
     if (auto err = string_or.takeError())
       return err;
 
@@ -208,32 +206,12 @@ public:
 
   llvm::Expected<lldb::ValueObjectSP>
   EvaluateIBIDExpression(llvm::StringRef user_expr) {
-    EvaluateExpressionOptions options;
-    // Set a timeout so we don't wait for locks forever.
-    options.SetTimeout(std::chrono::microseconds{1000});
-    // Don't unwind on error and ignore breakpoints.
-    options.SetUnwindOnError(false);
-    options.SetIgnoreBreakpoints(true);
-    // The language for these expressions is always going to be C.
-    options.SetLanguage(lldb::eLanguageTypeC11);
-    // And we specifically don't want to run the target if we can avoid it.
-    options.SetUseDynamic(lldb::eDynamicCanRunTarget);
-
     // Construct the expression to be executed.
     std::string expr =
         llvm::formatv("__ibid_evaluate_expression_in_frame({0}, \"{1}\")",
                       m_frame_index - m_index_offset, user_expr);
 
-    LLDB_LOG(GetLog(LLDBLog::Target), "evaluating expression `{0}`", expr);
-
-    lldb::ValueObjectSP result;
-    auto expr_result =
-        target_sp->EvaluateExpression(expr, frame_sp.get(), result, options);
-    if (expr_result != eExpressionCompleted) {
-      return llvm::createStringError("expression `" + expr +
-                                     "` failed: " + llvm::Twine(expr_result));
-    }
-    return result;
+    return DoEvaluateExpression(expr);
   }
 
   /// Resolve all the requisite interpreted symbol information.
@@ -318,7 +296,7 @@ public:
       // back in to GetValueObjectForFrameVariable, so we really just need to
       // make sure the name and type are correct.
       auto var = std::make_shared<lldb_private::Variable>(
-          (lldb::user_id_t)v->GetID() + i, v->GetName().GetCString(),
+          (lldb::user_id_t)i, v->GetName().GetCString(),
           v->GetName().GetCString(), nullptr, vt,
           /*owner_scope=*/nullptr,
           /*scope_range=*/Variable::RangeList{},
@@ -410,6 +388,8 @@ public:
   lldb::StackFrameSP frame_sp;
   lldb::ProcessSP process_sp;
 
+  lldb::ValueObjectSP frame_info_sp;
+
   std::string m_function_name = {};
 
   lldb::VariableListSP m_variable_list_sp = std::make_shared<VariableList>();
@@ -445,25 +425,32 @@ InterpretedFrameProvider::InterpretedFrameProvider(
   m_modules_to_elide.push_back(std::move(module_to_elide));
 }
 
-unsigned InterpretedFrameProvider::GetNumInterpretedFrames(
-    lldb::StackFrameSP anchor_frame) {
+unsigned
+InterpretedFrameProvider::GetNumInterpretedFrames(lldb::ProcessSP process_sp) {
   // Save the current number of interpreted frames per-stop. This works because
   // the provider is re-constructed at every stop point.
   if (m_num_interpreted_frames != 0)
     return m_num_interpreted_frames;
 
-  lldb::VariableSP var;
-  Status err;
-  // Make sure to call the *base* stack frame method. We use eNoDynamicValues
-  // because it looks like if we allow dynamic values it causes us to construct
-  // an execution context, which re-constructs the frame list. We do the same
-  // thing with the prefix `::` namespace specifier - it causes DIL to avoid
-  // getting the variable list using the frame, which would call all this code
-  // all over again in a recursion that causes a deadlock.
-  auto val_sp = anchor_frame->StackFrame::GetValueForVariableExpressionPath(
-      "::__ibid_num_frames", lldb::eNoDynamicValues, 0, var, err);
-  assert(val_sp);
-  m_num_interpreted_frames = val_sp->GetValueAsUnsigned(0);
+  // Get the __ibid_num_frames global variable.
+  // TODO: This refuses to find any value but zero UNLESS we set the breakpoint
+  // AFTER the process starts. If the process hasn't started, none of the
+  // machinery works at all.
+  auto &target = process_sp->GetTarget();
+  // TODO: should maybe cache this search? Though if the loaded module list
+  // changes that could be bad...
+  VariableList variable_list;
+  target.GetImages().FindGlobalVariables(ConstString("__ibid_num_frames"), 1,
+                                         variable_list);
+  if (variable_list.GetSize() != 1) {
+    return 0;
+  }
+
+  ExecutionContextScope *exe_scope = process_sp.get();
+  ValueObjectSP num_frames = ValueObjectVariable::Create(
+      exe_scope, variable_list.GetVariableAtIndex(0));
+  assert(num_frames);
+  m_num_interpreted_frames = num_frames->GetValueAsUnsigned(0);
   LLDB_LOG(GetLog(LLDBLog::Target), "Found {0} interpreted frames",
            m_num_interpreted_frames);
   return m_num_interpreted_frames;
@@ -536,8 +523,11 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
   // Now we have a concrete frame. Let's use that to produce the rest of the
   // frame info.
 
+  ThreadSP thread_sp = GetThread().shared_from_this();
+  ProcessSP process_sp = thread_sp->GetProcess();
+
   // We're in a frame, so figure out how many interpreted frames we even have.
-  unsigned num_frames = GetNumInterpretedFrames(frame_at_index_sp);
+  unsigned num_frames = GetNumInterpretedFrames(process_sp);
 
   // No interpreted frames, return the input frame.
   if (num_frames == 0)
@@ -553,9 +543,27 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
 
   // Produce a fake frame. That frame will call into the inferior to
   // produce the function name, etc.
-  ThreadSP thread_sp = GetThread().shared_from_this();
-  ProcessSP process_sp = thread_sp->GetProcess();
   TargetSP target_sp = process_sp->GetTarget().shared_from_this();
+
+  VariableList variable_list;
+  target_sp->GetImages().FindGlobalVariables(ConstString("__ibid_frames"), 1,
+                                             variable_list);
+  if (variable_list.GetSize() != 1) {
+    return frame_at_index_sp;
+  }
+
+  ExecutionContextScope *exe_scope = process_sp.get();
+  ValueObjectSP frame_list_sp = ValueObjectVariable::Create(
+      exe_scope, variable_list.GetVariableAtIndex(0));
+  auto type = frame_list_sp->GetCompilerType();
+  // Get the sie of the pointee in bytes. We need that to compute the offset (in
+  // bytes) to index into the frame list.
+  auto pointee_size_or = type.GetPointeeType().GetByteSize(exe_scope);
+  if (auto err = pointee_size_or.takeError())
+    return err;
+
+  ValueObjectSP frame_info_sp = frame_list_sp->GetSyntheticChildAtOffset(
+      idx * *pointee_size_or, type.GetPointeeType(), /*can_create=*/true);
 
   const lldb::addr_t cfa = LLDB_INVALID_ADDRESS;
   const bool cfa_is_valid = false;
@@ -574,6 +582,7 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
 
   // Then populate the various stuff we need to call into the inferior to
   // get information *about* the frame.
+  interpreted_frame->frame_info_sp = frame_info_sp;
   interpreted_frame->target_sp = target_sp;
   interpreted_frame->process_sp = process_sp;
   interpreted_frame->frame_sp = frame_at_index_sp;

@@ -642,14 +642,14 @@ Target::CreateBreakpoint(const FileSpecList *containingModules,
     if (language == lldb::eLanguageTypeUnknown)
       language = GetLanguage().AsLanguageType();
 
-    if (m_native_interpreter_sp) {
-      llvm::errs() << "HELLO FROM TARGET (fn name)\n";
-      auto resolver_sp =
-          m_native_interpreter_sp->GetBreakpointResolverForFunctionNames(
-              nullptr, func_names);
-      // TODO: Need a combined resolver that can compose other resolvers.
-      return CreateBreakpoint(filter_sp, resolver_sp, internal, hardware, true);
-    }
+    // if (m_native_interpreter_sp) {
+    //   llvm::errs() << "HELLO FROM TARGET (fn name)\n";
+    //   auto resolver_sp =
+    //       m_native_interpreter_sp->GetBreakpointResolverForFunctionNames(
+    //           nullptr, func_names);
+    //   // TODO: Need a combined resolver that can compose other resolvers.
+    //   return CreateBreakpoint(filter_sp, resolver_sp, internal, hardware, true);
+    // }
 
     BreakpointResolverSP resolver_sp(
         new BreakpointResolverName(nullptr, func_names, func_name_type_mask,

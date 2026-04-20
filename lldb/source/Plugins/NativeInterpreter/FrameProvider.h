@@ -37,7 +37,7 @@ public:
 
 private:
   /// Get the number of python frames.
-  unsigned GetNumInterpretedFrames(lldb::StackFrameSP anchor_frame);
+  unsigned GetNumInterpretedFrames(lldb::ProcessSP process_sp);
 
   /// The modules we want to elide. Any functions in these modules will be
   /// replaced with synthetic frames.
@@ -49,5 +49,7 @@ private:
   // Save the current number of interpreted frames per-stop. This works because
   // the provider is re-constructed at every stop point.
   uint32_t m_num_interpreted_frames = 0;
+
+  
 };
 } // namespace lldb_private

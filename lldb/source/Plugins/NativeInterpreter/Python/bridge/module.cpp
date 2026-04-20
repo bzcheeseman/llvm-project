@@ -47,20 +47,6 @@ struct Frame {
   std::string filename;
   int line, col;
 
-  // Only renders the line information if necessary, so it's safe to call
-  // multiple times.
-  void renderLineInfo() {
-    if (!renderedLineInfo.empty())
-      return;
-
-    renderedLineInfo = "{\"filename\":\"" + filename +
-                       "\",\"line\":" + std::to_string(line) +
-                       ",\"col\":" + std::to_string(col) + "}\0";
-  }
-
-  // The rendered line info string that we'll return to the debugger.
-  std::string renderedLineInfo = {};
-
   // Cache of name/expr -> value. Mainly for memory management so as to be able
   // to return char * from the APIs easily.
   std::unordered_map<std::string, std::string> valueCache = {};
@@ -94,40 +80,51 @@ struct Frame {
   std::string renderedNames = {};
 };
 
+struct __ibid_string {
+  const char *data = nullptr;
+  int64_t len = 0;
+
+  __ibid_string() = default;
+  __ibid_string(std::string_view str)
+      : data(str.data()), len((int64_t)str.size()) {}
+};
+
+struct __ibid_frame {
+  __ibid_string function;
+  __ibid_string filename;
+  unsigned line;
+  unsigned column;
+};
+
+#define IBID_SYMBOL Py_EXPORTED_SYMBOL [[gnu::used]]
+
+IBID_SYMBOL volatile unsigned __ibid_num_frames;
+
+IBID_SYMBOL volatile __ibid_frame *__ibid_frames;
+
 struct ProgramState {
   PyObject_HEAD std::vector<Frame> current_frames;
+  std::vector<__ibid_frame> framelist;
+
+  void updateFrames() {
+    __ibid_num_frames = current_frames.size();
+    *logfile << "updated __ibid_num_frames with " << __ibid_num_frames << "\n";
+    // Update the vector of ibid frames.
+    framelist.resize(__ibid_num_frames, {});
+    for (int i = 0, e = __ibid_num_frames; i < e; ++i) {
+      auto &frame = current_frames[i];
+      framelist[i] = {{frame.function},
+                      {frame.filename},
+                      (unsigned)frame.line,
+                      (unsigned)frame.col};
+    }
+    // And set the pointer.
+    __ibid_frames = framelist.data();
+    *logfile << "updated __ibid_frames\n";
+  }
 };
 
 static ProgramState *g_state = nullptr;
-
-Py_EXPORTED_SYMBOL extern "C" unsigned __ibid_num_frames = 0;
-
-Py_EXPORTED_SYMBOL extern "C" const char *
-__ibid_get_frame_function(unsigned idx) {
-  if (!g_state)
-    return nullptr;
-
-  if (idx >= g_state->current_frames.size())
-    return nullptr;
-
-  auto &frame = g_state->current_frames[idx];
-  return frame.function.c_str();
-}
-
-Py_EXPORTED_SYMBOL extern "C" const char *
-__ibid_get_frame_line_info(unsigned idx) {
-  if (!g_state)
-    return nullptr;
-
-  if (idx >= g_state->current_frames.size())
-    return nullptr;
-
-  auto &frame = g_state->current_frames[idx];
-  // Render the information into the frame's string.
-  frame.renderLineInfo();
-  // And provide the pointer.
-  return frame.renderedLineInfo.c_str();
-}
 
 static void populate_frame_locals(Frame &frame) {
   // If the value cache is fully populated, we're done. This works because the
@@ -201,13 +198,13 @@ static void populate_frame_locals(Frame &frame) {
 
 /// Returns the names of all the frame locals. This will render all the local
 /// names.
-Py_EXPORTED_SYMBOL extern "C" const char *
+Py_EXPORTED_SYMBOL extern "C" __ibid_string
 __ibid_get_frame_local_names(unsigned idx) {
   if (!g_state)
-    return nullptr;
+    return {};
 
   if (idx >= g_state->current_frames.size())
-    return nullptr;
+    return {};
 
   auto &frame = g_state->current_frames[idx];
 
@@ -215,18 +212,18 @@ __ibid_get_frame_local_names(unsigned idx) {
   populate_frame_locals(frame);
 
   frame.renderNames();
-  return frame.renderedNames.c_str();
+  return {frame.renderedNames};
 }
 
 /// Evaluate `expr` in the frame. This should also be used for locals - it will
 /// return those values no problem.
-Py_EXPORTED_SYMBOL extern "C" const char *
+Py_EXPORTED_SYMBOL extern "C" __ibid_string
 __ibid_evaluate_expression_in_frame(unsigned idx, const char *expr) {
   if (!g_state)
-    return nullptr;
+    return {};
 
   if (idx >= g_state->current_frames.size())
-    return nullptr;
+    return {};
 
   auto &frame = g_state->current_frames[idx];
 
@@ -236,14 +233,14 @@ __ibid_evaluate_expression_in_frame(unsigned idx, const char *expr) {
   // Check the value cache first. If we have it, return it.
   if (auto found = frame.valueCache.find(expr);
       found != frame.valueCache.end() && !found->second.empty()) {
-    return found->second.c_str();
+    return {found->second};
   }
 
   // Same for expressions.
   std::string exprKey = "expr:`" + std::string{expr} + "`";
   if (auto found = frame.valueCache.find(exprKey);
       found != frame.valueCache.end() && !found->second.empty()) {
-    return found->second.c_str();
+    return {found->second};
   }
 
   // OK - was not found, so compile and execute the code.
@@ -265,29 +262,30 @@ __ibid_evaluate_expression_in_frame(unsigned idx, const char *expr) {
     // If we got an error, print it.
     if (PyErr_Occurred()) {
       PyErr_Print();
-      return nullptr;
+      return {};
     }
     *logfile << "expression failed\n";
-    return nullptr;
+    return {};
   }
   list.append([&]() { Py_DECREF(result); });
 
   // Return the string representation of the object.
   PyObject *repr = PyObject_Repr(result);
   if (!repr)
-    return nullptr;
+    return {};
   list.append([&]() { Py_DECREF(repr); });
 
   auto string_or = py_string_to_string(repr);
   if (!string_or)
-    return nullptr;
+    return {};
 
   // Set the variable and its value in the cache.
   frame.valueCache[exprKey] = *string_or;
-  return frame.valueCache[exprKey].c_str();
+  return {frame.valueCache[exprKey]};
 }
 
-Py_EXPORTED_SYMBOL extern "C" void __ibid_debugger_trace_anchor(unsigned num_frames) {
+Py_EXPORTED_SYMBOL extern "C" void
+__ibid_debugger_trace_anchor(unsigned num_frames) {
   auto nf = num_frames + 1;
   (void)nf;
   return;
@@ -365,10 +363,9 @@ static PyObject *ProgramState_call(ProgramState *self, PyObject *args,
     frame = PyFrame_GetBack(frame);
   }
 
-  // Update the number of frames.
-  __ibid_num_frames = g_state->current_frames.size();
+  // Update the ibid frames.
+  self->updateFrames();
 
-  // Set the __ibid_debugger_anchor so the debugger knows where to pause.
   __ibid_debugger_trace_anchor(__ibid_num_frames);
 
   // Return ourselves.
