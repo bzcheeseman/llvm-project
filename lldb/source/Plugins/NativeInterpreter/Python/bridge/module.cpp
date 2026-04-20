@@ -84,9 +84,17 @@ struct __ibid_string {
   const char *data = nullptr;
   int64_t len = 0;
 
+  // TODO: These need to be POD structs so they're compatible with C.
   __ibid_string() = default;
   __ibid_string(std::string_view str)
       : data(str.data()), len((int64_t)str.size()) {}
+  __ibid_string(const char *str) : data(str), len(strlen(str)) {}
+
+  operator std::string_view() const { return {data, (size_t)len}; }
+
+  bool operator==(const __ibid_string &other) {
+    return std::string_view(*this) == std::string_view(other);
+  }
 };
 
 struct __ibid_frame {
@@ -94,6 +102,24 @@ struct __ibid_frame {
   __ibid_string filename;
   unsigned line;
   unsigned column;
+
+  bool matches(const __ibid_frame &other) {
+    if (function == other.function)
+      return true;
+
+    std::filesystem::path file(filename.data);
+    std::filesystem::path other_file(other.filename.data);
+    // Check if the two paths are equivalent.
+    if (std::filesystem::equivalent(file, other_file) && line == other.line) {
+      // If a column was provided, then those must also match.
+      if (column)
+        return column == other.column;
+
+      return true;
+    }
+
+    return false;
+  }
 };
 
 #define IBID_SYMBOL Py_EXPORTED_SYMBOL [[gnu::used]]
@@ -105,8 +131,10 @@ IBID_SYMBOL volatile __ibid_frame *__ibid_frames;
 struct ProgramState {
   PyObject_HEAD std::vector<Frame> current_frames;
   std::vector<__ibid_frame> framelist;
+  // Zeroth entry is invalid.
+  std::vector<__ibid_frame> breakpoints = {{"invalid", "invalid", 0, 0}};
 
-  void updateFrames() {
+  int updateFrames() {
     __ibid_num_frames = current_frames.size();
     *logfile << "updated __ibid_num_frames with " << __ibid_num_frames << "\n";
     // Update the vector of ibid frames.
@@ -118,13 +146,39 @@ struct ProgramState {
                       (unsigned)frame.line,
                       (unsigned)frame.col};
     }
+    int bkpt_hit = -1;
+    for (int i = 0, e = breakpoints.size(); i < e; ++i) {
+      if (framelist[0].matches(breakpoints[i])) {
+        *logfile << "hit breakpoint " << i << "\n";
+        bkpt_hit = i;
+        break;
+      }
+    }
     // And set the pointer.
     __ibid_frames = framelist.data();
     *logfile << "updated __ibid_frames\n";
+
+    return bkpt_hit;
   }
 };
 
 static ProgramState *g_state = nullptr;
+
+Py_EXPORTED_SYMBOL extern "C" int __ibid_set_breakpoint(const char *function,
+                                                        const char *filename,
+                                                        unsigned line,
+                                                        unsigned col) {
+  if (!g_state)
+    return -1;
+
+  g_state->breakpoints.push_back({{function}, {filename}, line, col});
+  return g_state->breakpoints.size() - 1;
+}
+
+Py_EXPORTED_SYMBOL extern "C" void __ibid_breakpoint_hit(int which) {
+  // Just something so we don't have a completely empty function.
+  (void)(which + 1);
+}
 
 static void populate_frame_locals(Frame &frame) {
   // If the value cache is fully populated, we're done. This works because the
@@ -284,12 +338,7 @@ __ibid_evaluate_expression_in_frame(unsigned idx, const char *expr) {
   return {frame.valueCache[exprKey]};
 }
 
-Py_EXPORTED_SYMBOL extern "C" void
-__ibid_debugger_trace_anchor(unsigned num_frames) {
-  auto nf = num_frames + 1;
-  (void)nf;
-  return;
-}
+Py_EXPORTED_SYMBOL extern "C" void __ibid_debugger_trace_anchor() { return; }
 
 static int ProgramState_init(ProgramState *self, PyObject *args_unused,
                              PyObject *kwds_unused) {
@@ -364,9 +413,11 @@ static PyObject *ProgramState_call(ProgramState *self, PyObject *args,
   }
 
   // Update the ibid frames.
-  self->updateFrames();
+  int bkpt_hit = self->updateFrames();
+  if (bkpt_hit != -1)
+    __ibid_breakpoint_hit(bkpt_hit);
 
-  __ibid_debugger_trace_anchor(__ibid_num_frames);
+  __ibid_debugger_trace_anchor();
 
   // Return ourselves.
   Py_INCREF(self);
