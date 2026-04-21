@@ -497,7 +497,9 @@ BreakpointSP Target::CreateBreakpoint(const FileSpecList *containingModules,
                                       bool hardware,
                                       LazyBool move_to_nearest_code) {
   if (GetNativeInterpreterInstance()) {
-    lldb::SearchFilterSP filter_sp = std::make_shared<SearchFilterForUnconstrainedSearches>(shared_from_this());
+    lldb::SearchFilterSP filter_sp =
+        std::make_shared<SearchFilterForUnconstrainedSearches>(
+            shared_from_this());
     auto resolver_sp =
         m_native_interpreter_sp->GetBreakpointResolverForSourceLoc(
             lldb::BreakpointSP{}, file, line_no, column);
@@ -648,7 +650,8 @@ Target::CreateBreakpoint(const FileSpecList *containingModules,
     //       m_native_interpreter_sp->GetBreakpointResolverForFunctionNames(
     //           nullptr, func_names);
     //   // TODO: Need a combined resolver that can compose other resolvers.
-    //   return CreateBreakpoint(filter_sp, resolver_sp, internal, hardware, true);
+    //   return CreateBreakpoint(filter_sp, resolver_sp, internal, hardware,
+    //   true);
     // }
 
     BreakpointResolverSP resolver_sp(
@@ -3546,7 +3549,7 @@ Status Target::Launch(ProcessLaunchInfo &launch_info, Stream *stream) {
 
   auto module_sp = GetExecutableModule();
   if (llvm::StringRef(module_sp->GetFileSpec().GetFilename()).contains("python")) {
-    error = InitializeNativeInterpreterPlugin("ibid", module_sp);
+    error = InitializeNativeInterpreterPlugin(module_sp);
     if (!error.Success())
       return error;
   }
@@ -3826,10 +3829,11 @@ void Target::InvalidateThreadFrameProviders() {
   }
 }
 
-Status Target::InitializeNativeInterpreterPlugin(llvm::StringRef which, lldb::ModuleSP module_to_elide) {
-  m_native_interpreter_sp = NativeInterpreter::CreateInstance(which, module_to_elide);
+Status Target::InitializeNativeInterpreterPlugin(lldb::ModuleSP module_to_elide) {
+  m_native_interpreter_sp = NativeInterpreter::CreateInstance(module_to_elide);
   if (!m_native_interpreter_sp)
-    return Status::FromErrorStringWithFormat("failed to initialize the native interpreter for %s", which.data());
+    return Status::FromErrorStringWithFormat(
+        "failed to initialize the native interpreter");
   return {};
 }
 

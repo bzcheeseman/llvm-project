@@ -38,11 +38,9 @@ public:
     PluginManager::UnregisterPlugin(IBIDInterpreterPlugin::CreateInstance);
   }
 
-  static llvm::StringRef GetPluginNameStatic() {
-    return "ibid-NativeInterpreter";
-  }
+  static llvm::StringRef GetPluginNameStatic() { return "NativeInterpreter"; }
 
-  llvm::StringRef GetPluginName() override { return "ibid-NativeInterpreter"; }
+  llvm::StringRef GetPluginName() override { return GetPluginNameStatic(); }
 
   // This plugin is actually really simple - just construct one and pass it out.
   static NativeInterpreterSP CreateInstance(lldb::ModuleSP module_to_elide) {
