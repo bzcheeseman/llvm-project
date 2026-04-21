@@ -546,7 +546,7 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
   TargetSP target_sp = process_sp->GetTarget().shared_from_this();
 
   VariableList variable_list;
-  target_sp->GetImages().FindGlobalVariables(ConstString("__ibid_frames"), 1,
+  target_sp->GetImages().FindGlobalVariables(ConstString("__ibid_current_backtrace"), 1,
                                              variable_list);
   if (variable_list.GetSize() != 1) {
     return frame_at_index_sp;

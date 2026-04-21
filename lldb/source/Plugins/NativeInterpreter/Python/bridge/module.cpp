@@ -6,6 +6,82 @@
 #include <unordered_map>
 #include <vector>
 
+//===----------------------------------------------------------------------===//
+// IBID Backtrace Implementation
+//===----------------------------------------------------------------------===//
+
+/// Length-delimited string. Much like llvm::StringRef, but does not rely on
+/// LLVM at all.
+struct __ibid_string {
+  const char *data = nullptr;
+  int64_t len = 0;
+
+  __ibid_string() = default;
+  __ibid_string(std::string_view str)
+      : data(str.data()), len((int64_t)str.size()) {}
+  __ibid_string(const char *str) : data(str), len(strlen(str)) {}
+
+  operator std::string_view() const { return {data, (size_t)len}; }
+
+  bool operator==(const __ibid_string &other) {
+    return std::string_view(*this) == std::string_view(other);
+  }
+};
+
+/// IBID program point representation. Each frame point has a function name
+/// representing the parent function, and a filename, line, and column
+/// representing the current instruction for the python interpreter.
+struct __ibid_program_point {
+  __ibid_string function;
+  __ibid_string filename;
+  unsigned line;
+  unsigned column;
+
+  bool matches(const __ibid_program_point &other) {
+    if (function == other.function)
+      return true;
+
+    std::filesystem::path file(filename.data);
+    std::filesystem::path other_file(other.filename.data);
+    // Check if the two paths are equivalent.
+    if (std::filesystem::equivalent(file, other_file) && line == other.line) {
+      // If a column was provided, then those must also match.
+      if (column)
+        return column == other.column;
+
+      return true;
+    }
+
+    return false;
+  }
+};
+
+#define IBID_SYMBOL __attribute__((visibility("default"))) extern "C"
+
+/// Provide the number of interpreter frames as a global variable the debugger
+/// can look up.
+IBID_SYMBOL volatile unsigned __ibid_num_frames = 0;
+
+/// Provide a pointer to the current interpreter frames as a global variable the
+/// debugger can look up. Counted by __ibid_num_frames.
+IBID_SYMBOL volatile __ibid_program_point *__ibid_current_backtrace = nullptr;
+
+/// Get the local variable names for frame at index `idx` as JSON.
+IBID_SYMBOL __ibid_string __ibid_get_frame_local_names(unsigned idx);
+
+/// Evaluate the expression `expr` in the frame at index `idx` and return the
+/// result as a string.
+IBID_SYMBOL __ibid_string __ibid_evaluate_expression_in_frame(unsigned idx,
+                                                              const char *expr);
+
+/// Provide a place for the debugger to set a breakpoint when an interpreter
+/// breakpoint is requested. This is always empty.
+IBID_SYMBOL void __ibid_debugger_anchor() { ; }
+
+//===----------------------------------------------------------------------===//
+// Helpers
+//===----------------------------------------------------------------------===//
+
 static std::string withoutQuotes(const std::string &s) {
   // Find the first non-quote character. Use that to slice the string and return
   // the substring that doesn't have quotes.
@@ -38,21 +114,97 @@ struct DestructorList {
 };
 } // namespace
 
-/// Provides a log file for the bridge so we can inspect what happened.
+/// Provides a log file for the bridge so we can inspect what inside the bridge.
 static std::unique_ptr<std::ofstream> logfile = nullptr;
 
-struct Frame {
+//===----------------------------------------------------------------------===//
+// Internal Representation
+//===----------------------------------------------------------------------===//
+
+/// Provides an owning representation of an __ibid_program_point so that we
+/// don't have to deal with memory management.
+namespace {
+struct ProgramPoint {
   PyFrameObject *frame;
   std::string function; // Each frame has a unique function.
   std::string filename;
   int line, col;
+
+  /// Populate the value cache from `frame`. This will pre-populate all local
+  /// variables into the value cache dict so we can access them later.
+  void populateLocals() {
+    // If the value cache is fully populated, we're done. This works because the
+    // value cache is recreated along with every frame each time we pause.
+    if (valueCachePopulated)
+      return;
+
+    DestructorList list;
+
+    PyObject *locals = PyFrame_GetLocals(frame);
+    if (!locals) {
+      *logfile << "no locals\n";
+      return;
+    }
+
+    // Create a dict we can use.
+    PyObject *localsDict = PyDict_New();
+    if (!localsDict) {
+      *logfile << "no locals dict?\n";
+      return;
+    }
+
+    if (PyDict_Update(localsDict, locals)) {
+      *logfile << "update failed\n";
+      return;
+    }
+
+    *logfile << "found " << PyDict_Size(localsDict) << " locals\n";
+
+    // Iterate the locals dict and populate the value cache.
+    PyObject *key, *value;
+    Py_ssize_t pos = 0;
+    Py_BEGIN_CRITICAL_SECTION(localsDict);
+    while (PyDict_Next(localsDict, &pos, &key, &value)) {
+      PyObject *keyRepr = PyObject_Repr(key);
+      if (!keyRepr) {
+        *logfile << "no keyrepr\n";
+        continue;
+      }
+
+      auto keyOr = py_string_to_string(keyRepr);
+      if (!keyOr) {
+        *logfile << "no keyOr\n";
+        continue;
+      }
+
+      PyObject *valueRepr = PyObject_Repr(value);
+      if (!valueRepr) {
+        *logfile << "no valuerepr\n";
+        continue;
+      }
+
+      auto valueOr = py_string_to_string(valueRepr);
+      if (!valueOr) {
+        *logfile << "no valueor\n";
+        continue;
+      }
+
+      // Update the value in the cache.
+      *logfile << "updating cache with " << withoutQuotes(*keyOr) << " = "
+               << *valueOr << "\n";
+      valueCache[withoutQuotes(*keyOr)] = std::move(*valueOr);
+    }
+    Py_END_CRITICAL_SECTION();
+    *logfile << "finished with populate_frame_locals\n";
+    valueCachePopulated = true;
+  }
 
   // Cache of name/expr -> value. Mainly for memory management so as to be able
   // to return char * from the APIs easily.
   std::unordered_map<std::string, std::string> valueCache = {};
   bool valueCachePopulated = false;
 
-  /// Render the names.
+  /// Render the local variable names.
   void renderNames() {
     if (!valueCachePopulated) {
       *logfile << "empty valueCache\n";
@@ -79,62 +231,16 @@ struct Frame {
   // Rendered variable names.
   std::string renderedNames = {};
 };
+} // namespace
 
-struct __ibid_string {
-  const char *data = nullptr;
-  int64_t len = 0;
-
-  // TODO: These need to be POD structs so they're compatible with C.
-  __ibid_string() = default;
-  __ibid_string(std::string_view str)
-      : data(str.data()), len((int64_t)str.size()) {}
-  __ibid_string(const char *str) : data(str), len(strlen(str)) {}
-
-  operator std::string_view() const { return {data, (size_t)len}; }
-
-  bool operator==(const __ibid_string &other) {
-    return std::string_view(*this) == std::string_view(other);
-  }
-};
-
-struct __ibid_frame {
-  __ibid_string function;
-  __ibid_string filename;
-  unsigned line;
-  unsigned column;
-
-  bool matches(const __ibid_frame &other) {
-    if (function == other.function)
-      return true;
-
-    std::filesystem::path file(filename.data);
-    std::filesystem::path other_file(other.filename.data);
-    // Check if the two paths are equivalent.
-    if (std::filesystem::equivalent(file, other_file) && line == other.line) {
-      // If a column was provided, then those must also match.
-      if (column)
-        return column == other.column;
-
-      return true;
-    }
-
-    return false;
-  }
-};
-
-#define IBID_SYMBOL Py_EXPORTED_SYMBOL [[gnu::used]]
-
-IBID_SYMBOL volatile unsigned __ibid_num_frames;
-
-IBID_SYMBOL volatile __ibid_frame *__ibid_frames;
-
+/// Overall state of the program, meant to be used as the global container.
+namespace {
 struct ProgramState {
-  PyObject_HEAD std::vector<Frame> current_frames;
-  std::vector<__ibid_frame> framelist;
-  // Zeroth entry is invalid.
-  std::vector<__ibid_frame> breakpoints = {{"invalid", "invalid", 0, 0}};
+  PyObject_HEAD std::vector<ProgramPoint> current_frames;
+  std::vector<__ibid_program_point> framelist;
 
-  int updateFrames() {
+  /// Update the frame list and the global state based on current_frames.
+  void update() {
     __ibid_num_frames = current_frames.size();
     *logfile << "updated __ibid_num_frames with " << __ibid_num_frames << "\n";
     // Update the vector of ibid frames.
@@ -146,114 +252,23 @@ struct ProgramState {
                       (unsigned)frame.line,
                       (unsigned)frame.col};
     }
-    int bkpt_hit = -1;
-    for (int i = 0, e = breakpoints.size(); i < e; ++i) {
-      if (framelist[0].matches(breakpoints[i])) {
-        *logfile << "hit breakpoint " << i << "\n";
-        bkpt_hit = i;
-        break;
-      }
-    }
     // And set the pointer.
-    __ibid_frames = framelist.data();
-    *logfile << "updated __ibid_frames\n";
-
-    return bkpt_hit;
+    __ibid_current_backtrace = framelist.data();
+    *logfile << "updated __ibid_current_backtrace\n";
   }
 };
+} // namespace
 
+/// Global pointer to store the memory used in the ibid states.
 static ProgramState *g_state = nullptr;
 
-Py_EXPORTED_SYMBOL extern "C" int __ibid_set_breakpoint(const char *function,
-                                                        const char *filename,
-                                                        unsigned line,
-                                                        unsigned col) {
-  if (!g_state)
-    return -1;
-
-  g_state->breakpoints.push_back({{function}, {filename}, line, col});
-  return g_state->breakpoints.size() - 1;
-}
-
-Py_EXPORTED_SYMBOL extern "C" void __ibid_breakpoint_hit(int which) {
-  // Just something so we don't have a completely empty function.
-  (void)(which + 1);
-}
-
-static void populate_frame_locals(Frame &frame) {
-  // If the value cache is fully populated, we're done. This works because the
-  // value cache is recreated along with every frame each time we pause.
-  if (frame.valueCachePopulated)
-    return;
-
-  DestructorList list;
-
-  PyObject *locals = PyFrame_GetLocals(frame.frame);
-  if (!locals) {
-    *logfile << "no locals\n";
-    return;
-  }
-
-  // Create a dict we can use.
-  PyObject *localsDict = PyDict_New();
-  if (!localsDict) {
-    *logfile << "no locals dict?\n";
-    return;
-  }
-  // list.append([&]() { Py_DECREF(localsDict); });
-
-  if (PyDict_Update(localsDict, locals)) {
-    *logfile << "update failed\n";
-    return;
-  }
-
-  *logfile << "found " << PyDict_Size(localsDict) << " locals\n";
-
-  // Iterate the locals dict and populate the value cache.
-  PyObject *key, *value;
-  Py_ssize_t pos = 0;
-  Py_BEGIN_CRITICAL_SECTION(localsDict);
-  while (PyDict_Next(localsDict, &pos, &key, &value)) {
-    PyObject *keyRepr = PyObject_Repr(key);
-    if (!keyRepr) {
-      *logfile << "no keyrepr\n";
-      continue;
-    }
-    // list.append([&]() { Py_DECREF(keyRepr); });
-
-    auto keyOr = py_string_to_string(keyRepr);
-    if (!keyOr) {
-      *logfile << "no keyOr\n";
-      continue;
-    }
-
-    PyObject *valueRepr = PyObject_Repr(value);
-    if (!valueRepr) {
-      *logfile << "no valuerepr\n";
-      continue;
-    }
-    // list.append([&]() { Py_DECREF(valueRepr); });
-
-    auto valueOr = py_string_to_string(valueRepr);
-    if (!valueOr) {
-      *logfile << "no valueor\n";
-      continue;
-    }
-
-    // Update the value in the cache.
-    *logfile << "updating cache with " << withoutQuotes(*keyOr) << " = "
-             << *valueOr << "\n";
-    frame.valueCache[withoutQuotes(*keyOr)] = std::move(*valueOr);
-  }
-  Py_END_CRITICAL_SECTION();
-  *logfile << "finished with populate_frame_locals\n";
-  frame.valueCachePopulated = true;
-}
+//===----------------------------------------------------------------------===//
+// IBID Implementations
+//===----------------------------------------------------------------------===//
 
 /// Returns the names of all the frame locals. This will render all the local
 /// names.
-Py_EXPORTED_SYMBOL extern "C" __ibid_string
-__ibid_get_frame_local_names(unsigned idx) {
+__ibid_string __ibid_get_frame_local_names(unsigned idx) {
   if (!g_state)
     return {};
 
@@ -263,7 +278,7 @@ __ibid_get_frame_local_names(unsigned idx) {
   auto &frame = g_state->current_frames[idx];
 
   // Populate the locals.
-  populate_frame_locals(frame);
+  frame.populateLocals();
 
   frame.renderNames();
   return {frame.renderedNames};
@@ -271,8 +286,8 @@ __ibid_get_frame_local_names(unsigned idx) {
 
 /// Evaluate `expr` in the frame. This should also be used for locals - it will
 /// return those values no problem.
-Py_EXPORTED_SYMBOL extern "C" __ibid_string
-__ibid_evaluate_expression_in_frame(unsigned idx, const char *expr) {
+__ibid_string __ibid_evaluate_expression_in_frame(unsigned idx,
+                                                  const char *expr) {
   if (!g_state)
     return {};
 
@@ -282,7 +297,7 @@ __ibid_evaluate_expression_in_frame(unsigned idx, const char *expr) {
   auto &frame = g_state->current_frames[idx];
 
   // Populate the locals.
-  populate_frame_locals(frame);
+  frame.populateLocals();
 
   // Check the value cache first. If we have it, return it.
   if (auto found = frame.valueCache.find(expr);
@@ -338,8 +353,11 @@ __ibid_evaluate_expression_in_frame(unsigned idx, const char *expr) {
   return {frame.valueCache[exprKey]};
 }
 
-Py_EXPORTED_SYMBOL extern "C" void __ibid_debugger_trace_anchor() { return; }
+//===----------------------------------------------------------------------===//
+// Python Extension Implementation
+//===----------------------------------------------------------------------===//
 
+/// Initializer for the ProgramState object in Python.
 static int ProgramState_init(ProgramState *self, PyObject *args_unused,
                              PyObject *kwds_unused) {
   // Take a reference to this object and store it in the global.
@@ -354,6 +372,7 @@ static int ProgramState_init(ProgramState *self, PyObject *args_unused,
   return 0;
 }
 
+/// Deallocator for the ProgramState object in Python.
 static void ProgramState_dealloc(ProgramState *self) {
   // Call the destructor and set the global to nullptr.
   self->~ProgramState();
@@ -363,6 +382,7 @@ static void ProgramState_dealloc(ProgramState *self) {
   logfile.reset(nullptr);
 }
 
+/// Call operator for the ProgramState object in Python.
 static PyObject *ProgramState_call(ProgramState *self, PyObject *args,
                                    PyObject *kwds) {
   PyFrameObject *frame;
@@ -406,18 +426,17 @@ static PyObject *ProgramState_call(ProgramState *self, PyObject *args,
     // Incref the frame - we're going to hold it.
     Py_INCREF(frame);
     self->current_frames.emplace_back(
-        Frame{frame, *function_or, *filename_or, start_line, start_col});
+        ProgramPoint{frame, *function_or, *filename_or, start_line, start_col});
 
     // Go to the next frame.
     frame = PyFrame_GetBack(frame);
   }
 
   // Update the ibid frames.
-  int bkpt_hit = self->updateFrames();
-  if (bkpt_hit != -1)
-    __ibid_breakpoint_hit(bkpt_hit);
+  self->update();
 
-  __ibid_debugger_trace_anchor();
+  // Call the anchor.
+  __ibid_debugger_anchor();
 
   // Return ourselves.
   Py_INCREF(self);

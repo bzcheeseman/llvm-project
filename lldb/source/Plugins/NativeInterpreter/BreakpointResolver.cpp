@@ -25,7 +25,7 @@ lldb_private::InterpretedBreakpointResolver::SearchCallback(
 
   // Add the address to the debugger anchor.
   const auto *symbol = context.module_sp->FindFirstSymbolWithNameAndType(
-      ConstString{"__ibid_debugger_trace_anchor"}, lldb::eSymbolTypeCode);
+      ConstString{"__ibid_debugger_anchor"}, lldb::eSymbolTypeCode);
   if (!symbol)
     return eCallbackReturnContinue;
 
