@@ -1588,11 +1588,12 @@ StackFrameListSP Thread::GetStackFrameList() {
         // Push the input frame list to protect the frame provider constructor
         // from re-entrancy.
         PushProviderFrameList(provider_input_frames);
+        auto id = provider_input_frames->GetIdentifier();
         if (auto provider = native_interp_plugin->GetFrameProvider(
-                std::move(provider_input_frames)))
-          m_frame_providers[provider_input_frames->GetIdentifier()] =
-              std::move(provider);
-        m_provider_chain_ids.push_back(provider_input_frames->GetIdentifier());
+                std::move(provider_input_frames))) {
+          m_frame_providers[id] = std::move(provider);
+          m_provider_chain_ids.push_back(id);
+        }
       }
 
       const auto &descriptors = target.GetScriptedFrameProviderDescriptors();
