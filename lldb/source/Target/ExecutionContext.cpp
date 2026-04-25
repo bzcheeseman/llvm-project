@@ -164,9 +164,8 @@ lldb_private::GetStoppedExecutionContext(
   if (!frame_sp && exe_ctx_ref_ptr->m_frame_list_id) {
     return llvm::createStringError(
         "attempted to create a StoppedExecutionContext but "
-        "ScriptedFrameProvider (name = %s - id = %u) is no longer available",
-        exe_ctx_ref_ptr->m_frame_list_id->first.GetName().str().c_str(),
-        exe_ctx_ref_ptr->m_frame_list_id->second);
+        "ScriptedFrameProvider (id = %u) is no longer available",
+        *exe_ctx_ref_ptr->m_frame_list_id);
   }
 
   return StoppedExecutionContext(target_sp, process_sp, thread_sp, frame_sp,
@@ -479,15 +478,12 @@ operator=(const ExecutionContext &exe_ctx) {
   if (frame_sp && thread_sp) {
     lldb::frame_list_id_t frame_list_id =
         frame_sp->GetContainingStackFrameListIdentifier();
-    auto frame_list_descriptor_or_err =
-        thread_sp->GetScriptedFrameProviderDescriptorForID(frame_list_id);
-    if (frame_list_descriptor_or_err) {
+    if (thread_sp->HasFrameProviderForID(frame_list_id)) {
       m_stack_id = frame_sp->GetStackID();
-      m_frame_list_id = {*frame_list_descriptor_or_err, frame_list_id};
+      m_frame_list_id = frame_list_id;
     } else {
-      LLDB_LOG_ERROR(GetLog(LLDBLog::Process),
-                     frame_list_descriptor_or_err.takeError(),
-                     "Failed to fetch scripted frame provider descriptor: {0}");
+      LLDB_LOG(GetLog(LLDBLog::Process),
+               "Failed to fetch scripted frame provider descriptor");
       m_stack_id.Clear();
       m_frame_list_id.reset();
     }
@@ -542,17 +538,14 @@ void ExecutionContextRef::SetFrameSP(const lldb::StackFrameSP &frame_sp) {
   lldb::ThreadSP thread_sp = frame_sp->GetThread();
   lldb::frame_list_id_t frame_list_id =
       frame_sp->GetContainingStackFrameListIdentifier();
-  auto frame_list_descriptor_or_err =
-      thread_sp->GetScriptedFrameProviderDescriptorForID(frame_list_id);
 
-  if (frame_list_descriptor_or_err) {
+  if (thread_sp->HasFrameProviderForID(frame_list_id)) {
     m_stack_id = frame_sp->GetStackID();
-    m_frame_list_id = {*frame_list_descriptor_or_err, frame_list_id};
+    m_frame_list_id = frame_list_id;
     SetThreadSP(thread_sp);
   } else {
-    LLDB_LOG_ERROR(GetLog(LLDBLog::Process),
-                   frame_list_descriptor_or_err.takeError(),
-                   "Failed to fetch scripted frame provider descriptor: {0}");
+    LLDB_LOG(GetLog(LLDBLog::Process),
+             "Failed to fetch scripted frame provider descriptor");
     ClearFrame();
     ClearThread();
     m_process_wp.reset();
@@ -685,7 +678,7 @@ lldb::StackFrameSP ExecutionContextRef::GetFrameSP() const {
   // during frame provider initialization.
   if (m_frame_list_id) {
     if (auto frame_list_sp =
-            thread_sp->GetFrameListByIdentifier(m_frame_list_id->second)) {
+            thread_sp->GetFrameListByIdentifier(*m_frame_list_id)) {
       if (auto frame_sp = frame_list_sp->GetFrameWithStackID(m_stack_id))
         return frame_sp;
     }

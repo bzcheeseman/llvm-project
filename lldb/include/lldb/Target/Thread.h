@@ -27,7 +27,10 @@
 #include "lldb/Utility/StructuredData.h"
 #include "lldb/Utility/UnimplementedError.h"
 #include "lldb/Utility/UserID.h"
+#include "lldb/lldb-forward.h"
 #include "lldb/lldb-private.h"
+#include "lldb/lldb-types.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/MemoryBuffer.h"
 
@@ -1311,8 +1314,7 @@ public:
   llvm::Error
   LoadScriptedFrameProvider(const ScriptedFrameProviderDescriptor &descriptor);
 
-  llvm::Expected<ScriptedFrameProviderDescriptor>
-  GetScriptedFrameProviderDescriptorForID(lldb::frame_list_id_t id) const;
+  bool HasFrameProviderForID(lldb::frame_list_id_t id) const;
 
   void ClearScriptedFrameProvider();
 
@@ -1325,21 +1327,10 @@ public:
   bool IsAnyProviderActive();
 
   /// Get the ordered chain of provider descriptors and their frame list IDs.
-  ///
-  /// Each element is a pair of:
-  ///   - \b ScriptedFrameProviderDescriptor: metadata for the provider
-  ///     (class name, description, priority, thread specs).
-  ///   - \b frame_list_id_t: the sequential frame list identifier assigned
-  ///     to that provider in the chain (1 for the first provider, 2 for the
-  ///     second, etc.). ID 0 is reserved for the base unwinder and is never
-  ///     present in this vector.
-  ///
   /// The vector is ordered by provider chain position (registration order
   /// adjusted by priority). It persists across \c ClearStackFrames() so that
   /// provider IDs remain stable for the lifetime of the thread.
-  const std::vector<
-      std::pair<ScriptedFrameProviderDescriptor, lldb::frame_list_id_t>> &
-  GetProviderChainIds() const {
+  llvm::ArrayRef<lldb::frame_list_id_t> GetProviderChainIds() const {
     return m_provider_chain_ids;
   }
 
@@ -1470,8 +1461,7 @@ protected:
 
   /// Ordered chain of provider IDs.
   /// Persists across ClearStackFrames() to maintain stable provider IDs.
-  std::vector<std::pair<ScriptedFrameProviderDescriptor, lldb::frame_list_id_t>>
-      m_provider_chain_ids;
+  std::vector<lldb::frame_list_id_t> m_provider_chain_ids;
 
   /// Map from frame list identifier to frame list weak pointer.
   mutable llvm::DenseMap<lldb::frame_list_id_t, lldb::StackFrameListWP>

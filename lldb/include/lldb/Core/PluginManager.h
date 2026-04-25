@@ -600,11 +600,8 @@ public:
   static bool
   UnregisterPlugin(NativeInterpreterCreateInstance create_callback);
 
-  static NativeInterpreterCreateInstance
-  GetNativeInterpreterCreateCallbackForPluginName(llvm::StringRef name);
-
-  static NativeInterpreterCreateInstance
-  GetNativeInterpreterCreateCallbackAtIndex(uint32_t idx);
+  static llvm::SmallVector<NativeInterpreterCreateInstance>
+  GetNativeInterpreterCreateCallbacks();
 
   // TypeSystem
   static bool RegisterPlugin(llvm::StringRef name, llvm::StringRef description,

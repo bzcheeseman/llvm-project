@@ -57,7 +57,9 @@
 #include "lldb/ValueObject/ValueObject.h"
 #include "lldb/ValueObject/ValueObjectConstResult.h"
 #include "lldb/lldb-enumerations.h"
+#include "lldb/lldb-forward.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/MathExtras.h"
 
 #include <memory>
@@ -1583,9 +1585,14 @@ StackFrameListSP Thread::GetStackFrameList() {
         // always get unwinder frames.
         auto provider_input_frames =
             std::make_shared<StackFrameList>(*this, m_prev_frames_sp, true);
-        if (auto provider =
-                native_interp_plugin->GetFrameProvider(std::move(provider_input_frames)))
-          m_frame_providers.push_back(std::move(provider));
+        // Push the input frame list to protect the frame provider constructor
+        // from re-entrancy.
+        PushProviderFrameList(provider_input_frames);
+        if (auto provider = native_interp_plugin->GetFrameProvider(
+                std::move(provider_input_frames)))
+          m_frame_providers[provider_input_frames->GetIdentifier()] =
+              std::move(provider);
+        m_provider_chain_ids.push_back(provider_input_frames->GetIdentifier());
       }
 
       const auto &descriptors = target.GetScriptedFrameProviderDescriptors();
@@ -1624,7 +1631,7 @@ StackFrameListSP Thread::GetStackFrameList() {
   if (!m_provider_chain_ids.empty()) {
     // We have providers - use the last one in the chain.
     // The last provider has already been chained with all previous providers.
-    auto [last_desc, last_id] = m_provider_chain_ids.back();
+    auto last_id = m_provider_chain_ids.back();
     auto it = m_frame_providers.find(last_id);
     if (it != m_frame_providers.end()) {
       SyntheticFrameProviderSP last_provider = it->second;
@@ -1688,7 +1695,7 @@ llvm::Error Thread::LoadScriptedFrameProvider(
     input_frames = m_unwinder_frames_sp;
   } else {
     // Subsequent providers wrap the previous provider.
-    auto [last_desc, last_id] = m_provider_chain_ids.back();
+    auto last_id = m_provider_chain_ids.back();
     auto it = m_frame_providers.find(last_id);
     if (it == m_frame_providers.end())
       return llvm::createStringError("previous frame provider not found");
@@ -1723,29 +1730,16 @@ llvm::Error Thread::LoadScriptedFrameProvider(
   m_frame_providers.insert({provider_id, *provider_or_err});
 
   // Add to the provider chain.
-  m_provider_chain_ids.push_back({descriptor, provider_id});
+  m_provider_chain_ids.push_back(provider_id);
 
   return llvm::Error::success();
 }
 
-llvm::Expected<ScriptedFrameProviderDescriptor>
-Thread::GetScriptedFrameProviderDescriptorForID(
-    lldb::frame_list_id_t id) const {
+bool Thread::HasFrameProviderForID(lldb::frame_list_id_t id) const {
   if (id == LLDB_UNWINDER_FRAME_LIST_ID)
-    return ScriptedFrameProviderDescriptor();
+    return false;
 
-  auto it = llvm::find_if(
-      m_provider_chain_ids,
-      [id](const std::pair<ScriptedFrameProviderDescriptor,
-                           lldb::frame_list_id_t> &provider_id_pair) {
-        return provider_id_pair.second == id;
-      });
-
-  if (it == m_provider_chain_ids.end())
-    return llvm::createStringError(
-        "Couldn't find ScriptedFrameProviderDescriptor for id = %u.", id);
-
-  return it->first;
+  return llvm::is_contained(m_provider_chain_ids, id);
 }
 
 void Thread::ClearScriptedFrameProvider() {

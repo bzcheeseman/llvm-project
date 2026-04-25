@@ -21,6 +21,7 @@
 #include "lldb/Utility/DataBufferLLVM.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
+#include "lldb/Utility/ValueType.h"
 #include "lldb/ValueObject/ValueObjectList.h"
 #include "lldb/ValueObject/ValueObjectVariable.h"
 #include "lldb/lldb-enumerations.h"
@@ -286,11 +287,10 @@ public:
       if (!v)
         continue;
 
-      // Construct the value type as an extended verison of what the value
+      // Construct the value type as an synthetic verison of what the value
       // type is. That'll allow the user to tell the scope and the
-      // 'extended-ness' of the variable.
-      lldb::ValueType vt =
-          lldb::ValueType(v->GetValueType() & ValueTypeExtendedMask);
+      // 'synthetic-ness' of the variable.
+      lldb::ValueType vt = GetSyntheticValueType(v->GetValueType());
 
       // Just make up a variable - the frame variable dumper just passes it
       // back in to GetValueObjectForFrameVariable, so we really just need to
@@ -310,10 +310,10 @@ public:
   }
 
   VariableList *GetVariableList(bool get_file_globals,
-                                bool include_extended_vars,
+                                bool include_synthetic_vars,
                                 lldb_private::Status *error_ptr) override {
-    if (!include_extended_vars) {
-      return frame_sp->GetVariableList(get_file_globals, include_extended_vars,
+    if (!include_synthetic_vars) {
+      return frame_sp->GetVariableList(get_file_globals, include_synthetic_vars,
                                        error_ptr);
     }
 
@@ -322,12 +322,12 @@ public:
   }
 
   lldb::VariableListSP
-  GetInScopeVariableList(bool get_file_globals, bool include_extended_vars,
+  GetInScopeVariableList(bool get_file_globals, bool include_synthetic_vars,
                          bool must_have_valid_location = false) override {
-    // The only type of variable we have is extended ones.
-    if (!include_extended_vars) {
+    // The only type of variable we have is synthetic ones.
+    if (!include_synthetic_vars) {
       return frame_sp->GetInScopeVariableList(
-          get_file_globals, include_extended_vars, must_have_valid_location);
+          get_file_globals, include_synthetic_vars, must_have_valid_location);
     }
 
     PopulateVariableList();
@@ -342,7 +342,7 @@ public:
       return frame_sp->GetValueObjectForFrameVariable(variable_sp, use_dynamic);
 
     return m_frame_locals_sp->FindValueObjectByValueName(
-        variable_sp->GetName().AsCString());
+        variable_sp->GetName().AsCString(nullptr));
   }
 
   lldb::ValueObjectSP FindVariable(ConstString name) override {
@@ -350,12 +350,12 @@ public:
     if (m_frame_locals_sp->GetSize() == 0)
       return frame_sp->FindVariable(name);
 
-    return m_frame_locals_sp->FindValueObjectByValueName(name.AsCString());
+    return m_frame_locals_sp->FindValueObjectByValueName(name.AsCString(nullptr));
   }
 
   lldb::ValueObjectSP GetValueForVariableExpressionPath(
       llvm::StringRef var_expr, lldb::DynamicValueType use_dynamic,
-      uint32_t options, lldb::VariableSP &var_sp, Status &error) override {
+      uint32_t options, lldb::VariableSP &var_sp, Status &error, lldb::DILMode dilMode) override {
     LLDB_LOG(GetLog(LLDBLog::Target), "attempting to run expression {0}",
              var_expr);
     // Evaluate the user expression.
@@ -365,11 +365,10 @@ public:
       return nullptr;
     }
 
-    // Construct the value type as an extended verison of what the value
+    // Construct the value type as an synthetic verison of what the value
     // type is. That'll allow the user to tell the scope and the
-    // 'extended-ness' of the variable.
-    lldb::ValueType vt =
-        lldb::ValueType((*result_or)->GetValueType() & ValueTypeExtendedMask);
+    // 'synthetic-ness' of the variable.
+    lldb::ValueType vt = GetSyntheticValueType((*result_or)->GetValueType());
 
     // Construct the variable and hand it back.
     var_sp = std::make_shared<lldb_private::Variable>(

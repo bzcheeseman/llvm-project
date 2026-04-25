@@ -88,10 +88,10 @@ private:
 } // namespace
 
 // Forward the native interpreter plugin to the IBID interpreter plugin.
-namespace lldb_private {
+extern "C" {
 void lldb_initialize_NativeInterpreter() {
   IBIDInterpreterPlugin::Initialize();
 }
 
 void lldb_terminate_NativeInterpreter() { IBIDInterpreterPlugin::Terminate(); }
-} // namespace lldb_private
+} // extern "C"

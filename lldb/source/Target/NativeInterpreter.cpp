@@ -17,8 +17,7 @@ lldb::NativeInterpreterSP
 NativeInterpreter::CreateInstance(lldb::ModuleSP module_to_elide) {
   // Just get the native interpreter plugin for a given name. We prefix with the
   // lowercase interpreter name to make the plugins easy to discover.
-  auto callback =
-      PluginManager::GetNativeInterpreterCreateCallbackForPluginName(
-          "NativeInterpreter");
-  return callback ? callback(module_to_elide) : nullptr;
+  auto callbacks =
+      PluginManager::GetNativeInterpreterCreateCallbacks();
+  return callbacks.empty() ? callbacks[0](module_to_elide) : nullptr;
 }

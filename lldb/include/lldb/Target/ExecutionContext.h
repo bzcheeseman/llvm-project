@@ -266,10 +266,8 @@ protected:
                                               /// backing object changes
   StackID m_stack_id; ///< The stack ID that this object refers to in case the
                       ///< backing object changes
-  /// A map of identifiers to scripted frame providers used in this thread.
-  mutable std::optional<
-      std::pair<ScriptedFrameProviderDescriptor, lldb::frame_list_id_t>>
-      m_frame_list_id;
+  /// The frame list ID used in this execution context.
+  mutable std::optional<lldb::frame_list_id_t> m_frame_list_id;
 };
 
 /// \class ExecutionContext ExecutionContext.h

@@ -333,7 +333,7 @@ protected:
         // Show all providers: unwinder (0) through the last in the chain.
         m_options.m_provider_start_id = 0;
         const auto &chain = thread->GetProviderChainIds();
-        m_options.m_provider_end_id = chain.empty() ? 0 : chain.back().second;
+        m_options.m_provider_end_id = chain.empty() ? 0 : chain.back();
       }
 
       // Provider filter mode: show sequential views for each provider in range.
@@ -364,28 +364,19 @@ protected:
         } else {
           // Find the descriptor in the provider chain.
           const auto &provider_chain = thread->GetProviderChainIds();
-          std::string provider_name = "Unknown";
-          std::string provider_desc;
-          std::optional<uint32_t> provider_priority;
+          std::string provider_desc = "Unknown";
 
-          for (const auto &[descriptor, id] : provider_chain) {
-            if (id == provider_id) {
-              provider_name = descriptor.GetName().str();
-              provider_desc = descriptor.GetDescription();
-              provider_priority = descriptor.GetPriority();
-              break;
-            }
+          auto providers = thread->GetFrameProviders();
+          for (auto id : provider_chain) {
+            auto provider_sp = providers.lookup(id);
+            if (!provider_sp)
+              continue;
+
+            provider_desc = provider_sp->GetDescription();
           }
 
-          strm.Printf(": %s", provider_name.c_str());
-          if (provider_priority.has_value()) {
-            strm.Printf(" (priority: %u)", *provider_priority);
-          }
+          strm.Printf(": %s", provider_desc.c_str());
           strm.Printf(" ===\n");
-
-          if (!provider_desc.empty()) {
-            strm.Printf("Description: %s\n", provider_desc.c_str());
-          }
         }
 
         // Print the backtrace for this provider.

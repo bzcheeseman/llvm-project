@@ -1913,15 +1913,9 @@ bool PluginManager::UnregisterPlugin(
   return GetNativeInterpreterInstances().UnregisterPlugin(create_callback);
 }
 
-NativeInterpreterCreateInstance
-PluginManager::GetNativeInterpreterCreateCallbackForPluginName(
-    llvm::StringRef name) {
-  return GetNativeInterpreterInstances().GetCallbackForName(name);
-}
-
-NativeInterpreterCreateInstance
-PluginManager::GetNativeInterpreterCreateCallbackAtIndex(uint32_t idx) {
-  return GetNativeInterpreterInstances().GetCallbackAtIndex(idx);
+llvm::SmallVector<NativeInterpreterCreateInstance>
+PluginManager::GetNativeInterpreterCreateCallbacks() {
+  return GetNativeInterpreterInstances().GetCreateCallbacks();
 }
 
 #pragma mark TypeSystem
