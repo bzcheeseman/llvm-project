@@ -1737,8 +1737,9 @@ llvm::Error Thread::LoadScriptedFrameProvider(
 }
 
 bool Thread::HasFrameProviderForID(lldb::frame_list_id_t id) const {
+  // We always have unwinder frames.
   if (id == LLDB_UNWINDER_FRAME_LIST_ID)
-    return false;
+    return true;
 
   return llvm::is_contained(m_provider_chain_ids, id);
 }
