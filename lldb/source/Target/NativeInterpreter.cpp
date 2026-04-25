@@ -19,5 +19,5 @@ NativeInterpreter::CreateInstance(lldb::ModuleSP module_to_elide) {
   // lowercase interpreter name to make the plugins easy to discover.
   auto callbacks =
       PluginManager::GetNativeInterpreterCreateCallbacks();
-  return callbacks.empty() ? callbacks[0](module_to_elide) : nullptr;
+  return !callbacks.empty() ? callbacks[0](module_to_elide) : nullptr;
 }
