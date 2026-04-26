@@ -152,6 +152,7 @@ struct ProgramPoint {
       *logfile << "no locals dict?\n";
       return;
     }
+    list.append([&] { Py_DECREF(localsDict); });
 
     if (PyDict_Update(localsDict, locals)) {
       *logfile << "update failed\n";
@@ -160,11 +161,19 @@ struct ProgramPoint {
 
     *logfile << "found " << PyDict_Size(localsDict) << " locals\n";
 
-    // Iterate the locals dict and populate the value cache.
+    // Iterate the locals dict and populate the value cache. This ignores
+    // __builtins__, modules, and functions. TBD if this is desirable behavior
+    // or not, though!
     PyObject *key, *value;
     Py_ssize_t pos = 0;
     Py_BEGIN_CRITICAL_SECTION(localsDict);
     while (PyDict_Next(localsDict, &pos, &key, &value)) {
+      // Ignore __builtins__ - that's not necessary.
+      if (!PyUnicode_CompareWithASCIIString(key, "__builtins__")) {
+        *logfile << "ignoring __builtins__\n";
+        continue;
+      }
+
       PyObject *keyRepr = PyObject_Repr(key);
       if (!keyRepr) {
         *logfile << "no keyrepr\n";
@@ -174,6 +183,12 @@ struct ProgramPoint {
       auto keyOr = py_string_to_string(keyRepr);
       if (!keyOr) {
         *logfile << "no keyOr\n";
+        continue;
+      }
+
+      // If the object is a module or function, we can ignore that too.
+      if (PyModule_Check(value) || PyFunction_Check(value)) {
+        *logfile << "ignoring module/function " << *keyOr << "\n";
         continue;
       }
 
@@ -399,12 +414,8 @@ static PyObject *ProgramState_call(ProgramState *self, PyObject *args,
   // Iterate the current frames in inner -> outer order. Once the frame becomes
   // nullptr, we have to end.
   while (frame && PyFrame_Check(frame)) {
-    // Set up a destructor list for all the strong references here.
-    DestructorList list;
-
     int last_instr = PyFrame_GetLasti(frame);
     auto *code = PyFrame_GetCode(frame);
-    // list.append([code] { Py_DECREF(code); });
 
     int start_line, start_col, end_line, end_col;
     if (PyCode_Addr2Location(code, last_instr, &start_line, &start_col,
@@ -443,6 +454,21 @@ static PyObject *ProgramState_call(ProgramState *self, PyObject *args,
   return (PyObject *)self;
 }
 
+/// __repr__ operator for the programstate object. This will allow us to view it
+/// as a variable too!
+static PyObject *ProgramState_repr(ProgramState *self) {
+  std::string formatstr = "ProgramState[";
+  for (int i = 0, e = self->current_frames.size(); i < e - 1; ++i) {
+    auto &f = self->current_frames[i];
+    formatstr += "{" + f.function + " at " + f.filename + ":" +
+                 std::to_string(f.line) + ":" + std::to_string(f.col) + "}, ";
+  }
+  auto &f = self->current_frames.back();
+  formatstr += "{" + f.function + " at " + f.filename + ":" +
+               std::to_string(f.line) + ":" + std::to_string(f.col) + "}]";
+  return PyUnicode_FromString(formatstr.c_str());
+}
+
 static PyTypeObject ProgramStateType = {
     PyVarObject_HEAD_INIT(NULL, 0) "lldb_bridge.ProgramState",
     sizeof(ProgramState),                     /*tp_basicsize*/
@@ -452,7 +478,7 @@ static PyTypeObject ProgramStateType = {
     0,                                        /*tp_getattr*/
     0,                                        /*tp_setattr*/
     0,                                        /*tp_compare*/
-    0,                                        /*tp_repr*/
+    (reprfunc)ProgramState_repr,              /*tp_repr*/
     0,                                        /*tp_as_number*/
     0,                                        /*tp_as_sequence*/
     0,                                        /*tp_as_mapping*/
