@@ -494,9 +494,19 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
       m_should_reset = true;
   }
 
-  if (idx >= num_frames)
-    return llvm::createStringError("not enough interpreted frames (" +
-                                   llvm::Twine(num_frames) + ")");
+  if (idx >= num_frames) {
+    // Synthetic frames are exhausted. Return the native C frame that sits at
+    // this merged index so the backtrace continues with the real call stack
+    // below the Python interpreter.
+    uint32_t native_idx = idx - num_frames;
+    auto native_sp = m_input_frames->GetFrameAtIndex(native_idx);
+    if (!native_sp)
+      return llvm::createStringError("no more frames");
+    // Update the frame index to its position in the merged (synthetic) list
+    // so it displays correctly in bt output.
+    native_sp->SetFrameIndex(idx);
+    return native_sp;
+  }
 
   // Produce a fake frame. That frame will call into the inferior to
   // produce the function name, etc.
