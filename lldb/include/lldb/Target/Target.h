@@ -286,6 +286,8 @@ public:
 
   bool GetDebugUtilityExpression() const;
 
+  bool GetEnableNativeInterpreter() const;
+
   std::optional<LoadScriptFromSymFile>
   GetAutoLoadScriptsForModule(llvm::StringRef module_name) const;
 

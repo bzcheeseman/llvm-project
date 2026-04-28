@@ -1,0 +1,28 @@
+# Tests that the backtrace correctly changes across stops at the same line.
+# The second stop at add:5 is called from compute:9 (w = add(z, x)), not
+# compute:8 (z = add(x, y)) as for the first stop.
+
+# REQUIRES: python
+# UNSUPPORTED: system-windows
+
+# RUN: env PYTHONPATH=%ibid_lib_dir %lldb -b \
+# RUN:   -o "settings set target.enable-native-interpreter true" \
+# RUN:   -o "file %python" \
+# RUN:   -o "settings set target.run-args %S/Inputs/ibid_test.py" \
+# RUN:   -o "breakpoint set --file ibid_test.py --line 5" \
+# RUN:   -o "run" \
+# RUN:   -o "bt" \
+# RUN:   -o "continue" \
+# RUN:   -o "bt" \
+# RUN:   -o "quit" \
+# RUN:   2>&1 | FileCheck %s
+
+# First stop: add called from compute:8 (z = add(x, y))
+# CHECK: stop reason = breakpoint
+# CHECK: frame #0: add at ibid_test.py:5{{.*}} [synthetic]
+# CHECK: frame #1: compute at ibid_test.py:8{{.*}} [synthetic]
+
+# Second stop: add called from compute:9 (w = add(z, x))
+# CHECK: stop reason = breakpoint
+# CHECK: frame #0: add at ibid_test.py:5{{.*}} [synthetic]
+# CHECK: frame #1: compute at ibid_test.py:9{{.*}} [synthetic]

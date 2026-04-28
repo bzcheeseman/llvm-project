@@ -228,6 +228,9 @@ let Definition = "target", Path = "target" in {
         EnumValues<"OptionEnumValues(g_load_script_from_sym_file_values)">,
         Desc<"A list of module/image names and whether LLDB should auto-load scripting "
              "resources for it from safe paths.">;
+  def EnableNativeInterpreter: Property<"enable-native-interpreter", "Boolean">,
+    DefaultFalse,
+    Desc<"If true, initialize the NativeInterpreter plugin as soon as the executable module is set, enabling source-line breakpoints in interpreted languages (e.g. Python) via the IBID tracing bridge.">;
 }
 
 let Definition = "process_experimental", Path = "target.process.experimental" in {

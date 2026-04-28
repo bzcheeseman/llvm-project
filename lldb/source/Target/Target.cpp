@@ -496,6 +496,16 @@ BreakpointSP Target::CreateBreakpoint(const FileSpecList *containingModules,
                                       LazyBool skip_prologue, bool internal,
                                       bool hardware,
                                       LazyBool move_to_nearest_code) {
+  // Lazy-initialize the NativeInterpreter on the first source-loc breakpoint
+  // request when the setting is on, so that `settings set
+  // target.enable-native-interpreter true` followed by `breakpoint set -f` works
+  // regardless of whether the setting was applied before or after `target
+  // create`.
+  if (GetEnableNativeInterpreter() && !m_native_interpreter_sp) {
+    if (ModuleSP exe_module = GetExecutableModule())
+      InitializeNativeInterpreterPlugin(exe_module);
+  }
+
   if (GetNativeInterpreterInstance()) {
     lldb::SearchFilterSP filter_sp =
         std::make_shared<SearchFilterForUnconstrainedSearches>(
@@ -1704,6 +1714,7 @@ void Target::SetExecutableModule(ModuleSP &executable_sp,
       }
       ModulesDidLoad(added_modules);
     }
+
   }
 }
 
@@ -3548,7 +3559,7 @@ Status Target::Launch(ProcessLaunchInfo &launch_info, Stream *stream) {
     return Status::FromErrorString("failed to launch or debug process");
 
   auto module_sp = GetExecutableModule();
-  if (llvm::StringRef(module_sp->GetFileSpec().GetFilename()).contains("python")) {
+  if (!m_native_interpreter_sp && GetEnableNativeInterpreter()) {
     error = InitializeNativeInterpreterPlugin(module_sp);
     if (!error.Success())
       return error;
@@ -5337,6 +5348,12 @@ bool TargetProperties::GetDebugUtilityExpression() const {
 void TargetProperties::SetDebugUtilityExpression(bool debug) {
   const uint32_t idx = ePropertyDebugUtilityExpression;
   SetPropertyAtIndex(idx, debug);
+}
+
+bool TargetProperties::GetEnableNativeInterpreter() const {
+  const uint32_t idx = ePropertyEnableNativeInterpreter;
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 std::optional<LoadScriptFromSymFile>

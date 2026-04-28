@@ -1,7 +1,10 @@
 #include <Python.h>
 
+#include <filesystem>
 #include <fstream>
 #include <functional>
+#include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -77,6 +80,66 @@ IBID_SYMBOL __ibid_string __ibid_evaluate_expression_in_frame(unsigned idx,
 /// Provide a place for the debugger to set a breakpoint when an interpreter
 /// breakpoint is requested. This is always empty.
 IBID_SYMBOL void __ibid_debugger_anchor() { ; }
+
+/// Anchor called only when a registered source-line breakpoint matches the
+/// current Python location. LLDB places source-line breakpoints here instead
+/// of on __ibid_debugger_anchor so it only stops on real matches.
+IBID_SYMBOL void __ibid_breakpoint_hit() { ; }
+
+/// ID of the source-line breakpoint that was just matched. Set immediately
+/// before __ibid_breakpoint_hit() is called so WasHit can identify which
+/// breakpoint fired without re-reading the full backtrace.
+IBID_SYMBOL volatile unsigned __ibid_hit_id = UINT_MAX;
+
+/// Register a source-line breakpoint with the bridge. Returns an opaque ID
+/// that LLDB stores and later compares against __ibid_hit_id.
+IBID_SYMBOL unsigned __ibid_add_breakpoint(const char *filename,
+                                            size_t filename_len,
+                                            unsigned line, unsigned col);
+
+//===----------------------------------------------------------------------===//
+// Source-line breakpoint registry
+//===----------------------------------------------------------------------===//
+
+namespace {
+struct IBIDSourceBP {
+  std::string requested_filename; // as provided by LLDB (basename or absolute)
+  unsigned line;
+  unsigned col; // 0 = any column
+  unsigned id;
+};
+} // namespace
+
+static std::vector<IBIDSourceBP> g_source_breakpoints;
+static unsigned g_next_bp_id = 0;
+
+unsigned __ibid_add_breakpoint(const char *filename, size_t filename_len,
+                                unsigned line, unsigned col) {
+  unsigned id = g_next_bp_id++;
+  g_source_breakpoints.push_back(
+      {std::string(filename, filename_len), line, col, id});
+  return id;
+}
+
+// Match the full path stored in the tracer against what the user requested.
+// If the request has no '/' it is treated as a basename-only match.
+static bool ibid_filename_matches(const std::string &full_path,
+                                   const std::string &requested) {
+  if (requested.find('/') == std::string::npos) {
+    auto pos = full_path.rfind('/');
+    auto basename =
+        pos != std::string::npos ? full_path.substr(pos + 1) : full_path;
+    return basename == requested;
+  }
+  if (full_path == requested)
+    return true;
+  // Suffix match for relative-with-dirs or absolute sub-paths.
+  if (full_path.size() > requested.size() &&
+      full_path.compare(full_path.size() - requested.size(), requested.size(),
+                        requested) == 0)
+    return full_path[full_path.size() - requested.size() - 1] == '/';
+  return false;
+}
 
 //===----------------------------------------------------------------------===//
 // Helpers
@@ -418,9 +481,14 @@ static PyObject *ProgramState_call(ProgramState *self, PyObject *args,
     auto *code = PyFrame_GetCode(frame);
 
     int start_line, start_col, end_line, end_col;
+
     if (PyCode_Addr2Location(code, last_instr, &start_line, &start_col,
                              &end_line, &end_col) == 0) {
-      return nullptr;
+      // PyFrame_GetLasti returns -1 on "call" events (no instruction has
+      // executed yet), which PyCode_Addr2Location cannot resolve. Skip this
+      // frame so we still return self and keep the local trace active.
+      frame = PyFrame_GetBack(frame);
+      continue;
     }
 
     // Extract the filename.
@@ -446,6 +514,31 @@ static PyObject *ProgramState_call(ProgramState *self, PyObject *args,
   // Update the ibid frames.
   self->update();
 
+  // Only match source-line breakpoints on "line" events. In Python 3.14+,
+  // "call" events report lasti=0 which PyCode_Addr2Location resolves to the
+  // first line of the function body — the same line as the "line" event that
+  // follows immediately. Firing on "call" would cause every breakpoint to hit
+  // twice per function invocation.
+  auto what_or = py_string_to_string(what_str);
+  bool is_line_event = what_or && *what_or == "line";
+
+  // If any source-line breakpoints are registered, check the topmost frame
+  // against them. Call __ibid_breakpoint_hit (the fast anchor) only on a
+  // real match so LLDB doesn't stop for every trace event.
+  if (is_line_event && !g_source_breakpoints.empty() &&
+      !self->current_frames.empty()) {
+    auto &top = self->current_frames[0];
+    for (auto &bp : g_source_breakpoints) {
+      if (ibid_filename_matches(top.filename, bp.requested_filename) &&
+          (unsigned)top.line == bp.line &&
+          (bp.col == 0 || (unsigned)top.col == bp.col)) {
+        __ibid_hit_id = bp.id;
+        __ibid_breakpoint_hit();
+        break;
+      }
+    }
+  }
+
   // Call the anchor.
   __ibid_debugger_anchor();
 
@@ -457,6 +550,8 @@ static PyObject *ProgramState_call(ProgramState *self, PyObject *args,
 /// __repr__ operator for the programstate object. This will allow us to view it
 /// as a variable too!
 static PyObject *ProgramState_repr(ProgramState *self) {
+  if (self->current_frames.empty())
+    return PyUnicode_FromString("ProgramState[]");
   std::string formatstr = "ProgramState[";
   for (int i = 0, e = self->current_frames.size(); i < e - 1; ++i) {
     auto &f = self->current_frames[i];

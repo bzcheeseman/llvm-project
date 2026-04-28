@@ -88,6 +88,16 @@ private:
   lldb::BreakpointLocationSP m_facade;
   lldb::BreakpointLocationSP m_real_loc;
 
+  // Set after the bridge has been told about this breakpoint via
+  // __ibid_add_breakpoint. UINT_MAX means not yet registered (slow path).
+  unsigned m_id = UINT_MAX;
+  // Location on __ibid_breakpoint_hit added once m_id is known (fast path).
+  lldb::BreakpointLocationSP m_hit_loc;
+
+  bool RegisterInBridge(lldb::StackFrameSP frame_sp);
+  bool CurrentPythonLocationMatches(lldb::ProcessSP process_sp,
+                                    lldb::TargetSP target_sp);
+
   InterpretedBreakpointResolver(const InterpretedBreakpointResolver &) = delete;
   const InterpretedBreakpointResolver &
   operator=(const InterpretedBreakpointResolver &) = delete;

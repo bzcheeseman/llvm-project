@@ -1,0 +1,24 @@
+# Tests that two independent breakpoints fire in the correct order.
+# BP1 at main:13 fires first, then BP2 at add:5 fires.
+
+# REQUIRES: python
+# UNSUPPORTED: system-windows
+
+# RUN: env PYTHONPATH=%ibid_lib_dir %lldb -b \
+# RUN:   -o "settings set target.enable-native-interpreter true" \
+# RUN:   -o "file %python" \
+# RUN:   -o "settings set target.run-args %S/Inputs/ibid_test.py" \
+# RUN:   -o "breakpoint set --file ibid_test.py --line 13" \
+# RUN:   -o "breakpoint set --file ibid_test.py --line 5" \
+# RUN:   -o "run" \
+# RUN:   -o "continue" \
+# RUN:   -o "quit" \
+# RUN:   2>&1 | FileCheck %s
+
+# First stop: BP1 at main:13
+# CHECK: stop reason = breakpoint 1.1
+# CHECK: frame #0: main at ibid_test.py:13{{.*}} [synthetic]
+
+# Second stop: BP2 at add:5
+# CHECK: stop reason = breakpoint 2.1
+# CHECK: frame #0: add at ibid_test.py:5{{.*}} [synthetic]

@@ -1,0 +1,18 @@
+# Tests that after hitting a breakpoint, continuing lets the process exit cleanly.
+
+# REQUIRES: python
+# UNSUPPORTED: system-windows
+
+# RUN: env PYTHONPATH=%ibid_lib_dir %lldb -b \
+# RUN:   -o "settings set target.enable-native-interpreter true" \
+# RUN:   -o "file %python" \
+# RUN:   -o "settings set target.run-args %S/Inputs/ibid_test.py" \
+# RUN:   -o "breakpoint set --file ibid_test.py --line 15" \
+# RUN:   -o "run" \
+# RUN:   -o "continue" \
+# RUN:   -o "quit" \
+# RUN:   2>&1 | FileCheck %s
+
+# CHECK: stop reason = breakpoint
+# CHECK: frame #0: main at ibid_test.py:15{{.*}} [synthetic]
+# CHECK: Process {{[0-9]+}} exited with status = 0
