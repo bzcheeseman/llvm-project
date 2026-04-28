@@ -1325,7 +1325,7 @@ ThreadPlanSP Thread::QueueThreadPlanForStepOverRange(
     bool abort_other_plans, const LineEntry &line_entry,
     const SymbolContext &addr_context, lldb::RunMode stop_other_threads,
     Status &status, LazyBool step_out_avoids_code_withoug_debug_info) {
-  // If the line entry is synthetic (from an interpreted frame such as Python),
+  // If the line entry is synthetic (from an interpreted frame),
   // let the native interpreter plugin handle the step-over instead of using
   // instruction-level ranges that don't exist for synthetic frames.
   if (line_entry.synthetic) {

@@ -209,7 +209,7 @@ lldb::BreakpointLocationSP lldb_private::InterpretedBreakpointResolver::WasHit(
   // The bridge checks g_source_breakpoints *before* calling
   // __ibid_debugger_anchor, so if the first trace event lands exactly on our
   // target line the bridge saw an empty registry and skipped the match. Check
-  // the current Python location now so we don't miss that first hit.
+  // the current interpreter location now so we don't miss that first hit.
   if (m_id != UINT_MAX && CurrentPythonLocationMatches(process_sp, target_sp))
     return m_facade;
 

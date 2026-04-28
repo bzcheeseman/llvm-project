@@ -13,7 +13,7 @@
 
 namespace lldb_private {
 
-/// Thread plan that steps over one source line in an interpreted (Python)
+/// Thread plan that steps over one source line in an interpreted
 /// frame. It arms the IBID bridge's step-over state, creates an internal
 /// breakpoint at __ibid_step_hit, and completes when that breakpoint fires
 /// (meaning the bridge detected a line change at the original call depth or

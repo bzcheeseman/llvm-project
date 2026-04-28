@@ -230,10 +230,10 @@ let Definition = "target", Path = "target" in {
              "resources for it from safe paths.">;
   def EnableNativeInterpreter: Property<"enable-native-interpreter", "Boolean">,
     DefaultFalse,
-    Desc<"If true, initialize the NativeInterpreter plugin as soon as the executable module is set, enabling source-line breakpoints in interpreted languages (e.g. Python) via the IBID tracing bridge.">;
+    Desc<"If true, initialize the NativeInterpreter plugin as soon as the executable module is set, enabling source-line breakpoints in interpreted languages via the IBID tracing bridge.">;
   def NativeInterpreterHideNativeFrames: Property<"native-interpreter-hide-native-frames", "Boolean">,
     DefaultFalse,
-    Desc<"If true, the backtrace only shows synthetic interpreted frames (e.g. Python frames) and hides the native C frames below them. When false (default), both synthetic and native frames are shown.">;
+    Desc<"If true, the backtrace only shows synthetic interpreter frames and hides the native C frames below them. When false (default), both interpreter and native frames are shown.">;
 }
 
 let Definition = "process_experimental", Path = "target.process.experimental" in {

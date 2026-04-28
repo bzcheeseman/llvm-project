@@ -1,5 +1,5 @@
-# Tests that a full backtrace shows synthetic Python frames at the top
-# followed by the native C frames from the Python interpreter below them.
+# Tests that a full backtrace shows synthetic interpreter frames at the top
+# followed by the native C frames from the interpreter below them.
 
 # REQUIRES: python
 # UNSUPPORTED: system-windows
@@ -14,7 +14,7 @@
 # RUN:   -o "quit" \
 # RUN:   2>&1 | FileCheck %s
 
-# Synthetic Python frames start at frame #0.
+# Synthetic interpreter frames start at frame #0.
 # CHECK: frame #0: add at ibid_test.py:5{{.*}} [synthetic]
 
 # Native C frames appear after the synthetic ones. The topmost C frame is

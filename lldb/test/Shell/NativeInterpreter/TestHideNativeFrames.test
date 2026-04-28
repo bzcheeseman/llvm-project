@@ -1,5 +1,5 @@
 # Tests that target.native-interpreter-hide-native-frames=true suppresses
-# native C frames so only synthetic Python frames appear in bt.
+# native C frames so only synthetic interpreter frames appear in bt.
 
 # REQUIRES: python
 # UNSUPPORTED: system-windows
@@ -15,7 +15,7 @@
 # RUN:   -o "quit" \
 # RUN:   2>&1 | FileCheck %s
 
-# With hide-native-frames=true, only Python frames appear.
+# With hide-native-frames=true, only interpreter frames appear.
 # CHECK: frame #0: add at ibid_test.py:5{{.*}} [synthetic]
 # CHECK: frame #1: compute at ibid_test.py
 # CHECK: frame #2: main at ibid_test.py

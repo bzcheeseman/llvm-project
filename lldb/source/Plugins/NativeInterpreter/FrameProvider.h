@@ -24,7 +24,7 @@ public:
     return "InterpretedFrameProvider";
   }
 
-  /// Create an instance of the python frame provider.
+  /// Create an instance of the interpreter frame provider.
   static llvm::Expected<lldb::SyntheticFrameProviderSP>
   CreateInstance(lldb::StackFrameListSP input_frames,
                  lldb::ModuleSP module_to_elide);
@@ -35,7 +35,7 @@ public:
 
   /// Consume the stale-frame reset signal. Returns true (and clears the flag)
   /// when the frame list should be cleared and rebuilt from index 0 — this
-  /// happens the first time Python frames are discovered after a concrete C
+  /// happens the first time interpreter frames are discovered after a concrete C
   /// frame was already cached at an earlier index.
   bool ShouldReset() override {
     bool r = m_should_reset;
@@ -44,10 +44,10 @@ public:
   }
 
 private:
-  /// Get the number of python frames.
+  /// Get the number of interpreter frames.
   unsigned GetNumInterpretedFrames(lldb::ProcessSP process_sp);
 
-  /// Frame index offset: always 0 once Python frames are available, meaning
+  /// Frame index offset: always 0 once interpreter frames are available, meaning
   /// synthetic frame i is returned for provider index i.
   uint32_t m_index_offset = UINT32_MAX;
 
@@ -55,7 +55,7 @@ private:
   // the provider is re-constructed at every stop point.
   uint32_t m_num_interpreted_frames = 0;
 
-  // Set when Python frames are first discovered at an index > 0, indicating
+  // Set when interpreter frames are first discovered at an index > 0, indicating
   // that stale concrete frames cached earlier must be discarded.
   bool m_should_reset = false;
 };

@@ -30,7 +30,7 @@ public:
     // TODO: We can use this:
     // https://docs.python.org/3.14/howto/remote_debugging.html#remote-debugging
     // to add our tracer to the interpreter state at process attach so the user
-    // doesn't have to (but only for python, obviously)
+    // doesn't have to (but only for interpreter languages, obviously)
   }
 
   static void Initialize() {

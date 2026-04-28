@@ -1,4 +1,4 @@
-# Tests that the full 4-frame Python backtrace is correct at a leaf breakpoint.
+# Tests that the full 4-frame interpreter backtrace is correct at a leaf breakpoint.
 
 # REQUIRES: python
 # UNSUPPORTED: system-windows

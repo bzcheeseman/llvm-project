@@ -82,7 +82,7 @@ IBID_SYMBOL __ibid_string __ibid_evaluate_expression_in_frame(unsigned idx,
 IBID_SYMBOL void __ibid_debugger_anchor() { ; }
 
 /// Anchor called only when a registered source-line breakpoint matches the
-/// current Python location. LLDB places source-line breakpoints here instead
+/// current interpreter location. LLDB places source-line breakpoints here instead
 /// of on __ibid_debugger_anchor so it only stops on real matches.
 IBID_SYMBOL void __ibid_breakpoint_hit() { ; }
 

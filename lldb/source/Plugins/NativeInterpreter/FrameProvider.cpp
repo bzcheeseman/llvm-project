@@ -457,9 +457,9 @@ InterpretedFrameProvider::GetNumInterpretedFrames(lldb::ProcessSP process_sp) {
 llvm::Expected<lldb::StackFrameSP>
 InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
   // Get the concrete frame at this index from the unwinder. We use it to
-  // reach the process/thread for reading inferior state. When Python frames
+  // reach the process/thread for reading inferior state. When interpreter frames
   // are available we replace it entirely with a synthetic frame; when no
-  // Python frames are present we pass it through unchanged.
+  // interpreter frames are present we pass it through unchanged.
   auto frame_at_index_sp = m_input_frames->GetFrameAtIndex(idx);
   if (frame_at_index_sp) {
     // Already a synthetic interpreted frame — return it directly.
@@ -479,13 +479,13 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
 
   unsigned num_frames = GetNumInterpretedFrames(process_sp);
 
-  // No Python frames yet — return the underlying concrete frame unchanged.
+  // No interpreter frames yet — return the underlying concrete frame unchanged.
   if (num_frames == 0)
     return frame_at_index_sp;
 
-  // Python frames are available. Synthetic frames always start at provider
+  // Interpreter frames are available. Synthetic frames always start at provider
   // index 0 (m_index_offset is always 0 once set). If this is the first
-  // call with Python frames and we're not at index 0, signal the frame list
+  // call with interpreter frames and we're not at index 0, signal the frame list
   // to discard any stale concrete frames it cached earlier and restart from
   // the beginning so synthetic frames occupy positions 0..num_frames-1.
   if (m_index_offset == UINT32_MAX) {
@@ -495,13 +495,13 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
   }
 
   if (idx >= num_frames) {
-    // When the user wants only Python frames, stop here.
+    // When the user wants only interpreter frames, stop here.
     if (process_sp->GetTarget().GetNativeInterpreterHideNativeFrames())
       return llvm::createStringError("native frames hidden");
 
     // Synthetic frames are exhausted. Return the native C frame that sits at
     // this merged index so the backtrace continues with the real call stack
-    // below the Python interpreter.
+    // below the interpreter.
     uint32_t native_idx = idx - num_frames;
     auto native_sp = m_input_frames->GetFrameAtIndex(native_idx);
     if (!native_sp)

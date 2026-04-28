@@ -93,8 +93,8 @@ bool SyntheticStackFrameList::FetchFramesUpTo(
         return true;
 
       // The provider may signal that frames cached at earlier indices are
-      // stale — for example a concrete C frame captured before the Python
-      // interpreter started. Clear them so synthetic frames start at 0.
+      // stale — for example a concrete C frame captured before the interpreter
+      // started. Clear them so synthetic frames start at 0.
       if (m_provider->ShouldReset()) {
         m_frames.clear();
         num_synthetic_frames = 0;
@@ -141,8 +141,8 @@ bool SyntheticStackFrameList::FetchFramesUpTo(
 
 lldb::StackFrameSP SyntheticStackFrameList::GetFrameAtIndex(uint32_t idx) {
   // When the provider is active and frame 0 is already cached as a concrete
-  // (non-synthetic) frame, that frame was captured before Python frames were
-  // available. Evict it so the provider can re-fetch frame 0 as a Python frame.
+  // (non-synthetic) frame, that frame was captured before interpreter frames were
+  // available. Evict it so the provider can re-fetch frame 0 as an interpreter frame.
   if (m_provider && idx == 0) {
     bool needs_evict = false;
     {
