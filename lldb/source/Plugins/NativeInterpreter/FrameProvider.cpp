@@ -495,6 +495,10 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
   }
 
   if (idx >= num_frames) {
+    // When the user wants only Python frames, stop here.
+    if (process_sp->GetTarget().GetNativeInterpreterHideNativeFrames())
+      return llvm::createStringError("native frames hidden");
+
     // Synthetic frames are exhausted. Return the native C frame that sits at
     // this merged index so the backtrace continues with the real call stack
     // below the Python interpreter.

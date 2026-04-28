@@ -288,6 +288,8 @@ public:
 
   bool GetEnableNativeInterpreter() const;
 
+  bool GetNativeInterpreterHideNativeFrames() const;
+
   std::optional<LoadScriptFromSymFile>
   GetAutoLoadScriptsForModule(llvm::StringRef module_name) const;
 

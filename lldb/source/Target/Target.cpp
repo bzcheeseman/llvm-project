@@ -5356,6 +5356,12 @@ bool TargetProperties::GetEnableNativeInterpreter() const {
       idx, g_target_properties[idx].default_uint_value != 0);
 }
 
+bool TargetProperties::GetNativeInterpreterHideNativeFrames() const {
+  const uint32_t idx = ePropertyNativeInterpreterHideNativeFrames;
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
+}
+
 std::optional<LoadScriptFromSymFile>
 TargetProperties::GetAutoLoadScriptsForModule(
     llvm::StringRef module_name) const {
