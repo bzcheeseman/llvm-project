@@ -10,12 +10,13 @@ def wrapper_main(filename: str):
         code = f.read()
 
     tracer = lldb_bridge.ProgramState()
+    code_obj = compile(code, filename, "exec")
 
-    # Inject the settrace into the inner module.
-    code = compile("import sys; sys.settrace(tracer)\n" + code, filename, "exec")
-
-    # Pass in the tracer and pretend that __name__ is __main__ so that the script executes as normal.
-    exec(code, globals={"__name__": "__main__", "tracer": tracer})
+    # Set the global trace function before exec so the new frame is traced
+    # from its very first line, with no line-number offset.
+    sys.settrace(tracer)
+    exec(code_obj, {"__name__": "__main__"})
+    sys.settrace(None)
 
 
 if __name__ == "__main__":
