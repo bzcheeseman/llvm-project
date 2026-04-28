@@ -1325,6 +1325,18 @@ ThreadPlanSP Thread::QueueThreadPlanForStepOverRange(
     bool abort_other_plans, const LineEntry &line_entry,
     const SymbolContext &addr_context, lldb::RunMode stop_other_threads,
     Status &status, LazyBool step_out_avoids_code_withoug_debug_info) {
+  // If the line entry is synthetic (from an interpreted frame such as Python),
+  // let the native interpreter plugin handle the step-over instead of using
+  // instruction-level ranges that don't exist for synthetic frames.
+  if (line_entry.synthetic) {
+    if (auto plugin = GetProcess()->GetTarget().GetNativeInterpreterInstance()) {
+      if (auto plan = plugin->CreateStepOverPlan(*this)) {
+        status = QueueThreadPlan(plan, abort_other_plans);
+        return plan;
+      }
+    }
+  }
+
   const bool include_inlined_functions = true;
   auto address_range =
       line_entry.GetSameLineContiguousAddressRange(include_inlined_functions);

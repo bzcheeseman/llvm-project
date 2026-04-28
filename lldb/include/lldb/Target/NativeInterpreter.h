@@ -11,6 +11,10 @@
 #include "llvm/Support/Error.h"
 
 namespace lldb_private {
+class Thread;
+} // namespace lldb_private
+
+namespace lldb_private {
 class NativeInterpreter : public PluginInterface {
 public:
   /// Create an instance of the native interpreter plugin.
@@ -39,5 +43,11 @@ public:
   GetBreakpointResolverForSourceLoc(const lldb::BreakpointSP &bkpt,
                                     FileSpec file, unsigned line,
                                     unsigned col) = 0;
+
+  /// Return a thread plan that steps over one source line in an interpreted
+  /// frame, or nullptr if the current frame is not an interpreted frame.
+  virtual lldb::ThreadPlanSP CreateStepOverPlan(Thread &thread) {
+    return nullptr;
+  }
 };
 } // namespace lldb_private

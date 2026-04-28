@@ -1,0 +1,28 @@
+# Tests step over a function call from within compute:8.
+# compute:8 is "z = add(x, y)"; stepping over it goes to compute:9.
+# This verifies that step-over skips through the callee (add) and stops
+# at the next line in the current function.
+
+# REQUIRES: python
+# UNSUPPORTED: system-windows
+
+# RUN: env PYTHONPATH=%ibid_lib_dir %lldb -b \
+# RUN:   -o "settings set target.enable-native-interpreter true" \
+# RUN:   -o "file %python" \
+# RUN:   -o "settings set target.run-args %S/Inputs/ibid_test.py" \
+# RUN:   -o "breakpoint set --file ibid_test.py --line 8" \
+# RUN:   -o "run" \
+# RUN:   -o "next" \
+# RUN:   -o "bt" \
+# RUN:   -o "quit" \
+# RUN:   2>&1 | FileCheck %s
+
+# Initial stop at compute:8
+# CHECK: stop reason = breakpoint
+# CHECK: frame #0: compute at ibid_test.py:8{{.*}} [synthetic]
+
+# After step over: compute:9, still nested under main and <module>
+# CHECK: stop reason = step over
+# CHECK: frame #0: compute at ibid_test.py:9{{.*}} [synthetic]
+# CHECK: frame #1: main at ibid_test.py:13{{.*}} [synthetic]
+# CHECK: frame #2: <module> at ibid_test.py:20{{.*}} [synthetic]

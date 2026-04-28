@@ -2,14 +2,19 @@
 
 #include "BreakpointResolver.h"
 #include "FrameProvider.h"
+#include "ThreadPlanStepOverInterpreted.h"
 
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Symbol/Function.h"
+#include "lldb/Symbol/VariableList.h"
+#include "lldb/Target/Process.h"
 #include "lldb/Target/Target.h"
+#include "lldb/Target/Thread.h"
 #include "lldb/Utility/FileSpec.h"
 #include "lldb/Utility/LLDBLog.h"
 #include "lldb/Utility/Log.h"
+#include "lldb/ValueObject/ValueObjectVariable.h"
 #include "lldb/lldb-enumerations.h"
 #include "lldb/lldb-forward.h"
 #include "llvm/Support/Error.h"
@@ -80,6 +85,27 @@ public:
                                     unsigned col = 0) override {
     return std::make_shared<InterpretedBreakpointResolver>(
         bkpt, std::vector<std::string>{}, file, line, col);
+  }
+
+  /// Return a step-over plan if the current thread is inside an interpreted
+  /// frame (i.e. __ibid_num_frames > 0), otherwise return nullptr.
+  lldb::ThreadPlanSP CreateStepOverPlan(Thread &thread) override {
+    auto process_sp = thread.GetProcess();
+    if (!process_sp)
+      return nullptr;
+
+    VariableList vars;
+    process_sp->GetTarget().GetImages().FindGlobalVariables(
+        ConstString("__ibid_num_frames"), 1, vars);
+    if (vars.GetSize() != 1)
+      return nullptr;
+
+    auto num_frames_sp = ValueObjectVariable::Create(
+        (ExecutionContextScope *)process_sp.get(), vars.GetVariableAtIndex(0));
+    if (!num_frames_sp || num_frames_sp->GetValueAsUnsigned(0) == 0)
+      return nullptr;
+
+    return std::make_shared<ThreadPlanStepOverInterpreted>(thread);
   }
 
 private:

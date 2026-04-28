@@ -1,0 +1,31 @@
+# Tests two consecutive step-over operations from main:13.
+# After "run" we stop at main:13; two "next" commands advance to main:14
+# then main:15, confirming that each step arms and fires independently.
+
+# REQUIRES: python
+# UNSUPPORTED: system-windows
+
+# RUN: env PYTHONPATH=%ibid_lib_dir %lldb -b \
+# RUN:   -o "settings set target.enable-native-interpreter true" \
+# RUN:   -o "file %python" \
+# RUN:   -o "settings set target.run-args %S/Inputs/ibid_test.py" \
+# RUN:   -o "breakpoint set --file ibid_test.py --line 13" \
+# RUN:   -o "run" \
+# RUN:   -o "next" \
+# RUN:   -o "next" \
+# RUN:   -o "bt" \
+# RUN:   -o "quit" \
+# RUN:   2>&1 | FileCheck %s
+
+# First stop at main:13
+# CHECK: stop reason = breakpoint
+# CHECK: frame #0: main at ibid_test.py:13{{.*}} [synthetic]
+
+# After first next: main:14
+# CHECK: stop reason = step over
+# CHECK: frame #0: main at ibid_test.py:14{{.*}} [synthetic]
+
+# After second next: main:15
+# CHECK: stop reason = step over
+# CHECK: frame #0: main at ibid_test.py:15{{.*}} [synthetic]
+# CHECK: frame #1: <module> at ibid_test.py:20{{.*}} [synthetic]

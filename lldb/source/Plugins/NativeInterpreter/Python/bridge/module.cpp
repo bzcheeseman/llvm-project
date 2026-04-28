@@ -97,6 +97,15 @@ IBID_SYMBOL unsigned __ibid_add_breakpoint(const char *filename,
                                             size_t filename_len,
                                             unsigned line, unsigned col);
 
+/// Anchor called when a step-over lands at a new line. LLDB places an
+/// internal breakpoint here to detect step completion.
+IBID_SYMBOL void __ibid_step_hit() { ; }
+
+/// Arm a step-over using the bridge's current frame state. Called by LLDB's
+/// thread plan before resuming after a stop. The step fires __ibid_step_hit
+/// when execution returns to the starting depth (or shallower) at a new line.
+IBID_SYMBOL void __ibid_arm_step_over_current();
+
 //===----------------------------------------------------------------------===//
 // Source-line breakpoint registry
 //===----------------------------------------------------------------------===//
@@ -113,6 +122,15 @@ struct IBIDSourceBP {
 static std::vector<IBIDSourceBP> g_source_breakpoints;
 static unsigned g_next_bp_id = 0;
 
+//===----------------------------------------------------------------------===//
+// Step-over state
+//===----------------------------------------------------------------------===//
+
+static bool g_step_active = false;
+static unsigned g_step_start_depth = 0;
+static unsigned g_step_start_line = 0;
+static std::string g_step_start_filename;
+
 unsigned __ibid_add_breakpoint(const char *filename, size_t filename_len,
                                 unsigned line, unsigned col) {
   unsigned id = g_next_bp_id++;
@@ -120,6 +138,7 @@ unsigned __ibid_add_breakpoint(const char *filename, size_t filename_len,
       {std::string(filename, filename_len), line, col, id});
   return id;
 }
+
 
 // Match the full path stored in the tracer against what the user requested.
 // If the request has no '/' it is treated as a basename-only match.
@@ -340,6 +359,16 @@ struct ProgramState {
 /// Global pointer to store the memory used in the ibid states.
 static ProgramState *g_state = nullptr;
 
+void __ibid_arm_step_over_current() {
+  if (!g_state || g_state->current_frames.empty())
+    return;
+  auto &top = g_state->current_frames[0];
+  g_step_start_filename = top.filename;
+  g_step_start_line = (unsigned)top.line;
+  g_step_start_depth = (unsigned)g_state->current_frames.size();
+  g_step_active = true;
+}
+
 //===----------------------------------------------------------------------===//
 // IBID Implementations
 //===----------------------------------------------------------------------===//
@@ -536,6 +565,22 @@ static PyObject *ProgramState_call(ProgramState *self, PyObject *args,
         __ibid_breakpoint_hit();
         break;
       }
+    }
+  }
+
+  // Check if an active step-over has completed. Fire __ibid_step_hit when
+  // execution returns to the starting depth (or shallower) at a different line.
+  if (is_line_event && g_step_active && !self->current_frames.empty()) {
+    unsigned depth = (unsigned)self->current_frames.size();
+    auto &top = self->current_frames[0];
+    bool stepped_out = depth < g_step_start_depth;
+    bool same_depth_new_line =
+        depth == g_step_start_depth &&
+        ((unsigned)top.line != g_step_start_line ||
+         !ibid_filename_matches(top.filename, g_step_start_filename));
+    if (stepped_out || same_depth_new_line) {
+      g_step_active = false;
+      __ibid_step_hit();
     }
   }
 

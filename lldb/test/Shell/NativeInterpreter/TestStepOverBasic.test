@@ -1,0 +1,26 @@
+# Tests step over a simple source line (main:13 -> main:14).
+# The step-over crosses a function call (compute), so it exercises the
+# depth-tracking logic in the bridge.
+
+# REQUIRES: python
+# UNSUPPORTED: system-windows
+
+# RUN: env PYTHONPATH=%ibid_lib_dir %lldb -b \
+# RUN:   -o "settings set target.enable-native-interpreter true" \
+# RUN:   -o "file %python" \
+# RUN:   -o "settings set target.run-args %S/Inputs/ibid_test.py" \
+# RUN:   -o "breakpoint set --file ibid_test.py --line 13" \
+# RUN:   -o "run" \
+# RUN:   -o "next" \
+# RUN:   -o "bt" \
+# RUN:   -o "quit" \
+# RUN:   2>&1 | FileCheck %s
+
+# Initial stop at main:13
+# CHECK: stop reason = breakpoint
+# CHECK: frame #0: main at ibid_test.py:13{{.*}} [synthetic]
+
+# After step over: must be at main:14 with the same frame depth
+# CHECK: stop reason = step over
+# CHECK: frame #0: main at ibid_test.py:14{{.*}} [synthetic]
+# CHECK: frame #1: <module> at ibid_test.py:20{{.*}} [synthetic]

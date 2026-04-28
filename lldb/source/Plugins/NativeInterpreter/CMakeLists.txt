@@ -2,6 +2,7 @@ add_lldb_library(lldbPluginNativeInterpreter PLUGIN
   BreakpointResolver.cpp
   FrameProvider.cpp
   Plugin.cpp
+  ThreadPlanStepOverInterpreted.cpp
 
   LINK_COMPONENTS
     BinaryFormat
