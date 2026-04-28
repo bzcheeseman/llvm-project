@@ -1594,6 +1594,7 @@ StackFrameListSP Thread::GetStackFrameList() {
           m_frame_providers[id] = std::move(provider);
           m_provider_chain_ids.push_back(id);
         }
+        PopProviderFrameList();
       }
 
       const auto &descriptors = target.GetScriptedFrameProviderDescriptors();
