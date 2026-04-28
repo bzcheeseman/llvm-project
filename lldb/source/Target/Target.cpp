@@ -496,16 +496,6 @@ BreakpointSP Target::CreateBreakpoint(const FileSpecList *containingModules,
                                       LazyBool skip_prologue, bool internal,
                                       bool hardware,
                                       LazyBool move_to_nearest_code) {
-  // Lazy-initialize the NativeInterpreter on the first source-loc breakpoint
-  // request when the setting is on, so that `settings set
-  // target.enable-native-interpreter true` followed by `breakpoint set -f` works
-  // regardless of whether the setting was applied before or after `target
-  // create`.
-  if (GetEnableNativeInterpreter() && !m_native_interpreter_sp) {
-    if (ModuleSP exe_module = GetExecutableModule())
-      InitializeNativeInterpreterPlugin(exe_module);
-  }
-
   if (GetNativeInterpreterInstance()) {
     lldb::SearchFilterSP filter_sp =
         std::make_shared<SearchFilterForUnconstrainedSearches>(
@@ -1715,6 +1705,12 @@ void Target::SetExecutableModule(ModuleSP &executable_sp,
       ModulesDidLoad(added_modules);
     }
 
+    if (GetEnableNativeInterpreter() && !m_native_interpreter_sp) {
+      if (Status err = InitializeNativeInterpreterPlugin(executable_sp);
+          !err.Success())
+        LLDB_LOG(GetLog(LLDBLog::Target),
+                 "NativeInterpreter init failed: {0}", err);
+    }
   }
 }
 
