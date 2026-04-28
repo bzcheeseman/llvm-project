@@ -84,10 +84,23 @@ bool SyntheticStackFrameList::FetchFramesUpTo(
     }
 
     // Keep fetching until we reach end_idx or the provider returns an error.
-    for (uint32_t idx = m_frames.size(); idx <= end_idx; idx++) {
+    // Use an explicit while-loop so ShouldReset() can restart from index 0
+    // without complications from the for-loop's built-in increment.
+    uint32_t idx = m_frames.size();
+    while (idx <= end_idx) {
       if (allow_interrupt &&
           m_thread.GetProcess()->GetTarget().GetDebugger().InterruptRequested())
         return true;
+
+      // The provider may signal that frames cached at earlier indices are
+      // stale — for example a concrete C frame captured before the Python
+      // interpreter started. Clear them so synthetic frames start at 0.
+      if (m_provider->ShouldReset()) {
+        m_frames.clear();
+        num_synthetic_frames = 0;
+        idx = 0;
+        continue; // Re-enter the loop at idx=0 without incrementing.
+      }
 
       // Ensure the provider sees its parent StackFrameList, not the
       // synthetic list being constructed. In a chain A->B->C, provider C
@@ -116,6 +129,7 @@ bool SyntheticStackFrameList::FetchFramesUpTo(
       // the frame without calling Thread::GetStackFrameList().
       frame_sp->m_frame_list_id = GetIdentifier();
       m_frames.push_back(frame_sp);
+      idx++;
     }
 
     return false; // Not interrupted.
@@ -123,6 +137,28 @@ bool SyntheticStackFrameList::FetchFramesUpTo(
 
   // If no provider, fall back to the base implementation.
   return StackFrameList::FetchFramesUpTo(end_idx, allow_interrupt);
+}
+
+lldb::StackFrameSP SyntheticStackFrameList::GetFrameAtIndex(uint32_t idx) {
+  // When the provider is active and frame 0 is already cached as a concrete
+  // (non-synthetic) frame, that frame was captured before Python frames were
+  // available. Evict it so the provider can re-fetch frame 0 as a Python frame.
+  if (m_provider && idx == 0) {
+    bool needs_evict = false;
+    {
+      std::shared_lock<std::shared_mutex> guard(m_list_mutex);
+      needs_evict =
+          !m_frames.empty() && m_frames[0] && !m_frames[0]->IsSynthetic();
+    }
+    if (needs_evict) {
+      std::unique_lock<std::shared_mutex> guard(m_list_mutex);
+      if (!m_frames.empty() && m_frames[0] && !m_frames[0]->IsSynthetic()) {
+        m_frames.clear();
+        m_concrete_frames_fetched = 0;
+      }
+    }
+  }
+  return StackFrameList::GetFrameAtIndex(idx);
 }
 
 void StackFrameList::CalculateCurrentInlinedDepth() {

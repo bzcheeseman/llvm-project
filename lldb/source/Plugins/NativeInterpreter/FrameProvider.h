@@ -9,8 +9,6 @@
 #include "lldb/Target/SyntheticFrameProvider.h"
 #include "lldb/lldb-forward.h"
 
-#include "llvm/ADT/DenseSet.h"
-
 namespace lldb_private {
 class InterpretedFrameProvider : public SyntheticFrameProvider {
 public:
@@ -35,21 +33,30 @@ public:
 
   llvm::Expected<lldb::StackFrameSP> GetFrameAtIndex(uint32_t idx) override;
 
+  /// Consume the stale-frame reset signal. Returns true (and clears the flag)
+  /// when the frame list should be cleared and rebuilt from index 0 — this
+  /// happens the first time Python frames are discovered after a concrete C
+  /// frame was already cached at an earlier index.
+  bool ShouldReset() override {
+    bool r = m_should_reset;
+    m_should_reset = false;
+    return r;
+  }
+
 private:
   /// Get the number of python frames.
   unsigned GetNumInterpretedFrames(lldb::ProcessSP process_sp);
 
-  /// The modules we want to elide. Any functions in these modules will be
-  /// replaced with synthetic frames.
-  llvm::SmallVector<lldb::ModuleSP, 2> m_modules_to_elide;
-
-  /// Frame index offset - we store the index of the last elided frame here so
-  /// that we can start providing the interpreted frames at the next index.
+  /// Frame index offset: always 0 once Python frames are available, meaning
+  /// synthetic frame i is returned for provider index i.
   uint32_t m_index_offset = UINT32_MAX;
+
   // Save the current number of interpreted frames per-stop. This works because
   // the provider is re-constructed at every stop point.
   uint32_t m_num_interpreted_frames = 0;
 
-  
+  // Set when Python frames are first discovered at an index > 0, indicating
+  // that stale concrete frames cached earlier must be discarded.
+  bool m_should_reset = false;
 };
 } // namespace lldb_private

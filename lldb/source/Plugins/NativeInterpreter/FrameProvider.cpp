@@ -31,7 +31,6 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/raw_ostream.h"
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -421,7 +420,7 @@ std::string InterpretedFrameProvider::GetDescription() const {
 InterpretedFrameProvider::InterpretedFrameProvider(
     lldb::StackFrameListSP input_frames, lldb::ModuleSP module_to_elide)
     : SyntheticFrameProvider(input_frames) {
-  m_modules_to_elide.push_back(std::move(module_to_elide));
+  (void)module_to_elide;
 }
 
 unsigned
@@ -457,88 +456,47 @@ InterpretedFrameProvider::GetNumInterpretedFrames(lldb::ProcessSP process_sp) {
 
 llvm::Expected<lldb::StackFrameSP>
 InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
-  // TODO: Part of the issue for Python is that all I have is the trace anchor.
-  // If I had the anchor on the function that was wrapped around the call to an
-  // instruction, then I'd be able to traceback from crashes and stuff in
-  // extensions too.
-
-  // Let's think this through. First step: I need to elide anything from the
-  // python interpreter or the tracer bridge. Then, as a replacement for *those
-  // frames* I need to return synthetic frames. The implementation should allow
-  // me to check the ibid stuff anywhere inside the process, so that should be
-  // fine.
-
-  // Get the *concrete* frame at this index. This will call into the unwinder
-  // (in theory). If the concrete frame here isn't in the interpreter,
-  // return it. If it *is* in the interpreter, then we want to replace it
-  // with the actual interpreted frames.
+  // Get the concrete frame at this index from the unwinder. We use it to
+  // reach the process/thread for reading inferior state. When Python frames
+  // are available we replace it entirely with a synthetic frame; when no
+  // Python frames are present we pass it through unchanged.
   auto frame_at_index_sp = m_input_frames->GetFrameAtIndex(idx);
-  // If we have a frame here, check some things about it to see if we should
-  // elide it or not.
   if (frame_at_index_sp) {
-    // If it's an interpreted frame already, return it.
+    // Already a synthetic interpreted frame — return it directly.
     if (llvm::isa<InterpretedFrame>(frame_at_index_sp.get()))
       return frame_at_index_sp;
-
-    // Otherwise, get the symbol context so we can pull out the module. If the
-    // module does not match the module we want to elide, return the frame.
-    // TODO: This is not working - it's eliding just the modules from the bridge
-    // extension but not the actual python frames...maybe a filter function
-    // would work better than a single module and an equality check?
-    const auto &frame_sc = frame_at_index_sp->GetSymbolContext(
-        lldb::eSymbolContextModule | lldb::eSymbolContextFunction);
-    if (frame_sc.module_sp) {
-      //   if (llvm::StringRef(frame_sc.GetFunctionName())
-      //           .contains("__ibid_debugger_trace_anchor")) {
-      //     // If it's the anchor, we want to elide anything from that module.
-      //     if (!llvm::is_contained(m_modules_to_elide, frame_sc.module_sp))
-      //       m_modules_to_elide.push_back(frame_sc.module_sp);
-      //   }
-      //   // TODO: Why is it only eliding modules from the trace anchor module
-      //   and not the base goddamn module that I passed in at the beginning?
-
-      //   // If it's not one of the modules we want to elide, return the frame.
-      //   if (!llvm::is_contained(m_modules_to_elide, frame_sc.module_sp))
-      //     return frame_at_index_sp;
-
-      // It is one of the modules/frames we want to elide.
-    }
   } else {
-    // If we can't get *anything* from m_input_frames, then use the zeroth frame
-    // to figure out how many interpreted frames there are.
+    // No frame at this index; fall back to the zeroth concrete frame so we
+    // can still read the process/thread state.
     frame_at_index_sp = m_input_frames->GetFrameWithConcreteFrameIndex(0);
   }
 
-  // Still no frame, return an error (should never happen).
   if (!frame_at_index_sp)
     return llvm::createStringError("no frame at index 0?");
-
-  // At this point we're going to elide the frame below. If we haven't
-  // already set the index offset, set it. That index offset is the offset
-  // of the first synthetic frame in the top-level frame list.
-  if (m_index_offset == UINT32_MAX)
-    m_index_offset = idx;
-
-  // Now we have a concrete frame. Let's use that to produce the rest of the
-  // frame info.
 
   ThreadSP thread_sp = GetThread().shared_from_this();
   ProcessSP process_sp = thread_sp->GetProcess();
 
-  // We're in a frame, so figure out how many interpreted frames we even have.
   unsigned num_frames = GetNumInterpretedFrames(process_sp);
 
-  // No interpreted frames, return the input frame.
+  // No Python frames yet — return the underlying concrete frame unchanged.
   if (num_frames == 0)
     return frame_at_index_sp;
 
-  // If we have some interpreted frames, make sure it's at an index we can
-  // support.
-  if (idx - m_index_offset >= num_frames)
-    return llvm::createStringError("not enough interpreted frames (offset: " +
-                                   llvm::Twine(m_index_offset) +
-                                   ", num frames: " + llvm::Twine(num_frames) +
-                                   ")");
+  // Python frames are available. Synthetic frames always start at provider
+  // index 0 (m_index_offset is always 0 once set). If this is the first
+  // call with Python frames and we're not at index 0, signal the frame list
+  // to discard any stale concrete frames it cached earlier and restart from
+  // the beginning so synthetic frames occupy positions 0..num_frames-1.
+  if (m_index_offset == UINT32_MAX) {
+    m_index_offset = 0;
+    if (idx > 0)
+      m_should_reset = true;
+  }
+
+  if (idx >= num_frames)
+    return llvm::createStringError("not enough interpreted frames (" +
+                                   llvm::Twine(num_frames) + ")");
 
   // Produce a fake frame. That frame will call into the inferior to
   // produce the function name, etc.
@@ -562,7 +520,8 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
     return err;
 
   ValueObjectSP frame_info_sp = frame_list_sp->GetSyntheticChildAtOffset(
-      idx * *pointee_size_or, type.GetPointeeType(), /*can_create=*/true);
+      (idx - m_index_offset) * *pointee_size_or, type.GetPointeeType(),
+      /*can_create=*/true);
 
   const lldb::addr_t cfa = LLDB_INVALID_ADDRESS;
   const bool cfa_is_valid = false;

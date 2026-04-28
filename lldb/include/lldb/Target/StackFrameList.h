@@ -35,7 +35,7 @@ public:
   uint32_t GetNumFrames(bool can_create = true);
 
   /// Get the frame at index \p idx. Invisible frames cannot be indexed.
-  lldb::StackFrameSP GetFrameAtIndex(uint32_t idx);
+  virtual lldb::StackFrameSP GetFrameAtIndex(uint32_t idx);
 
   /// Get the first concrete frame with index greater than or equal to \p idx.
   /// Unlike \ref GetFrameAtIndex, this cannot return a synthetic frame.
@@ -277,6 +277,10 @@ public:
                           bool show_inline_frames,
                           lldb::SyntheticFrameProviderSP provider_sp,
                           uint64_t provider_id);
+
+  /// Override GetFrameAtIndex to evict stale concrete frames at index 0
+  /// before the provider has had a chance to inject its synthetic frames.
+  lldb::StackFrameSP GetFrameAtIndex(uint32_t idx) override;
 
 protected:
   /// Override FetchFramesUpTo to lazily return frames from the provider

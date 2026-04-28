@@ -190,6 +190,12 @@ public:
   ///     the frame list.
   virtual llvm::Expected<lldb::StackFrameSP> GetFrameAtIndex(uint32_t idx) = 0;
 
+  /// Returns true if the provider has determined that previously fetched frames
+  /// are stale and the frame list should be cleared and rebuilt from index 0.
+  /// The signal is consumed (reset to false) by the first call that returns
+  /// true, so callers need only check once per iteration.
+  virtual bool ShouldReset() { return false; }
+
   /// Get the thread associated with this provider.
   Thread &GetThread() { return m_input_frames->GetThread(); }
 
