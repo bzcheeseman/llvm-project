@@ -31,6 +31,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Regex.h"
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -38,6 +39,41 @@
 
 using namespace lldb;
 using namespace lldb_private;
+
+/// Read an __ibid_string from the inferior. The string is a struct with data
+/// and length.
+static llvm::Expected<std::string>
+ReadIBIDStringFromInferior(lldb_private::ValueObject *valobj) {
+  auto len_sp = valobj->GetChildMemberWithName("len");
+  if (!len_sp)
+    return llvm::createStringError("no `len` child member");
+
+  auto data_sp = valobj->GetChildMemberWithName("data");
+  if (!data_sp)
+    return llvm::createStringError("no `data` child member");
+
+  unsigned length = len_sp->GetValueAsUnsigned(0);
+
+  // Zero length or nullptr isn't an error, it means empty string.
+  if (length == 0 || data_sp->GetValueAsUnsigned(0) == 0)
+    return "";
+
+  // Construct a memory buffer on this side with the correct length.
+  lldb::WritableDataBufferSP buffer_sp =
+      std::make_shared<lldb_private::DataBufferHeap>(length, '\0');
+  Status s;
+  auto [len, was_truncated] = data_sp->ReadPointedString(buffer_sp, s, false);
+  if (!s.Success())
+    return s.takeError();
+
+  assert(!was_truncated);
+
+  // And construct an std::string with it.
+  std::string out{(const char *)buffer_sp->GetBytes(), length};
+  LLDB_LOG(GetLog(LLDBLog::Target),
+           "read string \"{0}\" (len: {1}) from the inferior", out, length);
+  return out;
+}
 
 namespace {
 // TODO: How do I make it so this is NOT called from within an expression?
@@ -74,41 +110,6 @@ public:
     }
 
     return StackFrame::GetSymbolContext(resolve_scope);
-  }
-
-  /// Read an __ibid_string from the inferior. The string is a struct with data
-  /// and length.
-  llvm::Expected<std::string>
-  ReadIBIDStringFromInferior(lldb_private::ValueObject *valobj) {
-    auto len_sp = valobj->GetChildMemberWithName("len");
-    if (!len_sp)
-      return llvm::createStringError("no `len` child member");
-
-    auto data_sp = valobj->GetChildMemberWithName("data");
-    if (!data_sp)
-      return llvm::createStringError("no `data` child member");
-
-    unsigned length = len_sp->GetValueAsUnsigned(0);
-
-    // Zero length or nullptr isn't an error, it means empty string.
-    if (length == 0 || data_sp->GetValueAsUnsigned(0) == 0)
-      return "";
-
-    // Construct a memory buffer on this side with the correct length.
-    lldb::WritableDataBufferSP buffer_sp =
-        std::make_shared<lldb_private::DataBufferHeap>(length, '\0');
-    Status s;
-    auto [len, was_truncated] = data_sp->ReadPointedString(buffer_sp, s, false);
-    if (!s.Success())
-      return s.takeError();
-
-    assert(!was_truncated);
-
-    // And construct an std::string with it.
-    std::string out{(const char *)buffer_sp->GetBytes(), length};
-    LLDB_LOG(GetLog(LLDBLog::Target),
-             "read string \"{0}\" (len: {1}) from the inferior", out, length);
-    return out;
   }
 
   llvm::Expected<std::string> GetIBIDFunction() {
@@ -349,12 +350,14 @@ public:
     if (m_frame_locals_sp->GetSize() == 0)
       return frame_sp->FindVariable(name);
 
-    return m_frame_locals_sp->FindValueObjectByValueName(name.AsCString(nullptr));
+    return m_frame_locals_sp->FindValueObjectByValueName(
+        name.AsCString(nullptr));
   }
 
   lldb::ValueObjectSP GetValueForVariableExpressionPath(
       llvm::StringRef var_expr, lldb::DynamicValueType use_dynamic,
-      uint32_t options, lldb::VariableSP &var_sp, Status &error, lldb::DILMode dilMode) override {
+      uint32_t options, lldb::VariableSP &var_sp, Status &error,
+      lldb::DILMode dilMode) override {
     LLDB_LOG(GetLog(LLDBLog::Target), "attempting to run expression {0}",
              var_expr);
     // Evaluate the user expression.
@@ -454,11 +457,41 @@ InterpretedFrameProvider::GetNumInterpretedFrames(lldb::ProcessSP process_sp) {
   return m_num_interpreted_frames;
 }
 
+bool InterpretedFrameProvider::ShouldElideFrame(lldb::StackFrameSP frame_sp,
+                                                lldb::ProcessSP process_sp) {
+  auto &target = process_sp->GetTarget();
+  // TODO: should maybe cache this search? Though if the loaded module list
+  // changes that could be bad...
+  VariableList variable_list;
+  target.GetImages().FindGlobalVariables(
+      ConstString("__ibid_function_elision_regex"), 1, variable_list);
+  if (variable_list.GetSize() != 1) {
+    return false;
+  }
+
+  ExecutionContextScope *exe_scope = process_sp.get();
+  ValueObjectSP regex = ValueObjectVariable::Create(
+      exe_scope, variable_list.GetVariableAtIndex(0));
+  assert(regex);
+  auto string_or = ReadIBIDStringFromInferior(regex.get());
+  if (auto err = string_or.takeError()) {
+    LLDB_LOG_ERROR(GetLog(LLDBLog::Target), std::move(err),
+                   "error reading __ibid_function_elision_regex from inferior");
+    return false;
+  }
+
+  llvm::Regex r{*string_or, llvm::Regex::IgnoreCase};
+  return r.match(frame_sp->GetFunctionName());
+}
+
 llvm::Expected<lldb::StackFrameSP>
 InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
+  ThreadSP thread_sp = GetThread().shared_from_this();
+  ProcessSP process_sp = thread_sp->GetProcess();
+
   // Get the concrete frame at this index from the unwinder. We use it to
-  // reach the process/thread for reading inferior state. When interpreter frames
-  // are available we replace it entirely with a synthetic frame; when no
+  // reach the process/thread for reading inferior state. When interpreter
+  // frames are available we replace it entirely with a synthetic frame; when no
   // interpreter frames are present we pass it through unchanged.
   auto frame_at_index_sp = m_input_frames->GetFrameAtIndex(idx);
   if (frame_at_index_sp) {
@@ -474,20 +507,22 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
   if (!frame_at_index_sp)
     return llvm::createStringError("no frame at index 0?");
 
-  ThreadSP thread_sp = GetThread().shared_from_this();
-  ProcessSP process_sp = thread_sp->GetProcess();
-
   unsigned num_frames = GetNumInterpretedFrames(process_sp);
 
-  // No interpreter frames yet — return the underlying concrete frame unchanged.
+  // No interpreter frames yet — return the underlying concrete frame
+  // unchanged.
   if (num_frames == 0)
+    return frame_at_index_sp;
+
+  // Check if we should elide this frame. This is defined by the IBID plugin.
+  if (!ShouldElideFrame(frame_at_index_sp, process_sp))
     return frame_at_index_sp;
 
   // Interpreter frames are available. Synthetic frames always start at provider
   // index 0 (m_index_offset is always 0 once set). If this is the first
-  // call with interpreter frames and we're not at index 0, signal the frame list
-  // to discard any stale concrete frames it cached earlier and restart from
-  // the beginning so synthetic frames occupy positions 0..num_frames-1.
+  // call with interpreter frames and we're not at index 0, signal the frame
+  // list to discard any stale concrete frames it cached earlier and restart
+  // from the beginning so synthetic frames occupy positions 0..num_frames-1.
   if (m_index_offset == UINT32_MAX) {
     m_index_offset = 0;
     if (idx > 0)
@@ -517,8 +552,8 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
   TargetSP target_sp = process_sp->GetTarget().shared_from_this();
 
   VariableList variable_list;
-  target_sp->GetImages().FindGlobalVariables(ConstString("__ibid_current_backtrace"), 1,
-                                             variable_list);
+  target_sp->GetImages().FindGlobalVariables(
+      ConstString("__ibid_current_backtrace"), 1, variable_list);
   if (variable_list.GetSize() != 1) {
     return frame_at_index_sp;
   }

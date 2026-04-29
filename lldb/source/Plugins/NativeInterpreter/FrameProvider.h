@@ -47,6 +47,9 @@ private:
   /// Get the number of interpreter frames.
   unsigned GetNumInterpretedFrames(lldb::ProcessSP process_sp);
 
+  /// Check if we should elide this frame.
+  bool ShouldElideFrame(lldb::StackFrameSP frame_sp, lldb::ProcessSP process_sp);
+
   /// Frame index offset: always 0 once interpreter frames are available, meaning
   /// synthetic frame i is returned for provider index i.
   uint32_t m_index_offset = UINT32_MAX;
