@@ -67,5 +67,11 @@ private:
   // Set when interpreter frames are first discovered at an index > 0, indicating
   // that stale concrete frames cached earlier must be discarded.
   bool m_should_reset = false;
+
+  // Elision regex string read from __ibid_function_elision_regex in the
+  // inferior. Keyed by stop ID: when the process advances to a new stop the
+  // cached value is evicted and re-read.
+  std::string m_elision_regex;
+  uint32_t m_elision_regex_stop_id = UINT32_MAX;
 };
 } // namespace lldb_private

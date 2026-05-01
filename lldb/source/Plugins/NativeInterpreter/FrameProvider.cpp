@@ -459,29 +459,35 @@ InterpretedFrameProvider::GetNumInterpretedFrames(lldb::ProcessSP process_sp) {
 
 uint32_t InterpretedFrameProvider::GetNonElidedNativeFrameIdx(
     ProcessSP process_sp, uint32_t n) {
-  // Read the elision regex from the bridge.
-  std::string regex_str;
-  VariableList var_list;
-  process_sp->GetTarget().GetImages().FindGlobalVariables(
-      ConstString("__ibid_function_elision_regex"), 1, var_list);
-  if (var_list.GetSize() == 1) {
-    ValueObjectSP vo = ValueObjectVariable::Create(
-        (ExecutionContextScope *)process_sp.get(),
-        var_list.GetVariableAtIndex(0));
-    if (vo) {
-      auto str_or = ReadIBIDStringFromInferior(vo.get());
-      if (str_or)
-        regex_str = std::move(*str_or);
-      else
-        LLDB_LOG_ERROR(GetLog(LLDBLog::Target), str_or.takeError(),
-                       "error reading __ibid_function_elision_regex: {0}");
+  // Read the elision regex from the bridge, caching it for the duration of
+  // this stop. The cache is keyed by stop ID so it is evicted automatically
+  // when the process advances to a new stop.
+  uint32_t stop_id = process_sp->GetStopID();
+  if (m_elision_regex_stop_id != stop_id) {
+    m_elision_regex.clear();
+    VariableList var_list;
+    process_sp->GetTarget().GetImages().FindGlobalVariables(
+        ConstString("__ibid_function_elision_regex"), 1, var_list);
+    if (var_list.GetSize() == 1) {
+      ValueObjectSP vo = ValueObjectVariable::Create(
+          (ExecutionContextScope *)process_sp.get(),
+          var_list.GetVariableAtIndex(0));
+      if (vo) {
+        auto str_or = ReadIBIDStringFromInferior(vo.get());
+        if (str_or)
+          m_elision_regex = std::move(*str_or);
+        else
+          LLDB_LOG_ERROR(GetLog(LLDBLog::Target), str_or.takeError(),
+                         "error reading __ibid_function_elision_regex: {0}");
+      }
     }
+    m_elision_regex_stop_id = stop_id;
   }
 
-  if (regex_str.empty())
+  if (m_elision_regex.empty())
     return n; // no elision: the n-th passthrough frame is at native index n
 
-  llvm::Regex r{regex_str, llvm::Regex::IgnoreCase};
+  llvm::Regex r{m_elision_regex, llvm::Regex::IgnoreCase};
 
   // Walk concrete frames, skipping those whose function name matches the
   // elision regex (interpreter engine internals). Return the native index of
