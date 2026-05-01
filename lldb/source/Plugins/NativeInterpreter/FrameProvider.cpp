@@ -543,30 +543,32 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
   ThreadSP thread_sp = GetThread().shared_from_this();
   ProcessSP process_sp = thread_sp->GetProcess();
 
-  // Get the concrete frame at this index from the unwinder. We use it to
-  // reach the process/thread for reading inferior state. When interpreter
-  // frames are available we replace it entirely with a synthetic frame; when no
-  // interpreter frames are present we pass it through unchanged.
   auto frame_at_index_sp = m_input_frames->GetFrameAtIndex(idx);
   if (frame_at_index_sp) {
     // Already a synthetic interpreted frame — return it directly.
     if (llvm::isa<InterpretedFrame>(frame_at_index_sp.get()))
       return frame_at_index_sp;
-  } else {
-    // No frame at this index; fall back to the zeroth concrete frame so we
-    // can still read the process/thread state.
-    frame_at_index_sp = m_input_frames->GetFrameWithConcreteFrameIndex(0);
   }
-
-  if (!frame_at_index_sp)
-    return llvm::createStringError("no frame at index 0?");
 
   unsigned num_frames = GetNumInterpretedFrames(process_sp);
 
-  // No interpreter frames yet — return the underlying concrete frame
-  // unchanged.
-  if (num_frames == 0)
+  // No interpreter frames yet — pass concrete frames through unchanged.
+  // A null frame means we've walked past the end of the concrete stack;
+  // return an error so FetchFramesUpTo stops and marks all frames fetched.
+  if (num_frames == 0) {
+    if (!frame_at_index_sp)
+      return llvm::createStringError("no more frames");
     return frame_at_index_sp;
+  }
+
+  // Interpreter frames are available. We need a valid frame object to read
+  // process/thread state from when building synthetic frames. Fall back to
+  // the zeroth concrete frame if idx is past the end of the native stack.
+  if (!frame_at_index_sp) {
+    frame_at_index_sp = m_input_frames->GetFrameWithConcreteFrameIndex(0);
+    if (!frame_at_index_sp)
+      return llvm::createStringError("no frame at index 0?");
+  }
 
   // Interpreter frames are available. Synthetic frames always start at provider
   // index 0 (m_index_offset is always 0 once set). If this is the first
