@@ -140,24 +140,6 @@ bool SyntheticStackFrameList::FetchFramesUpTo(
 }
 
 lldb::StackFrameSP SyntheticStackFrameList::GetFrameAtIndex(uint32_t idx) {
-  // When the provider is active and frame 0 is already cached as a concrete
-  // (non-synthetic) frame, that frame was captured before interpreter frames were
-  // available. Evict it so the provider can re-fetch frame 0 as an interpreter frame.
-  if (m_provider && idx == 0) {
-    bool needs_evict = false;
-    {
-      std::shared_lock<std::shared_mutex> guard(m_list_mutex);
-      needs_evict =
-          !m_frames.empty() && m_frames[0] && !m_frames[0]->IsSynthetic();
-    }
-    if (needs_evict) {
-      std::unique_lock<std::shared_mutex> guard(m_list_mutex);
-      if (!m_frames.empty() && m_frames[0] && !m_frames[0]->IsSynthetic()) {
-        m_frames.clear();
-        m_concrete_frames_fetched = 0;
-      }
-    }
-  }
   return StackFrameList::GetFrameAtIndex(idx);
 }
 
@@ -918,24 +900,33 @@ StackFrameList::GetSelectedFrameIndex(SelectMostRelevant select_most_relevant) {
 }
 
 uint32_t StackFrameList::SetSelectedFrame(lldb_private::StackFrame *frame) {
-  std::shared_lock<std::shared_mutex> guard(m_list_mutex);
+  // Hold m_selected_frame_mutex for the entire function so m_selected_frame_idx
+  // is stable while SetDefaultFileAndLineToSelectedFrame runs below.
   std::lock_guard<std::recursive_mutex> selected_frame_guard(
       m_selected_frame_mutex);
+  {
+    // Scope the shared (read) lock so it is released before calling
+    // SetDefaultFileAndLineToSelectedFrame. That function calls GetFrameAtIndex
+    // which may need to fetch frames and acquire the write lock. On macOS a
+    // thread holding a read lock cannot upgrade to a write lock and will
+    // deadlock if it tries.
+    std::shared_lock<std::shared_mutex> guard(m_list_mutex);
 
-  const_iterator pos;
-  const_iterator begin = m_frames.begin();
-  const_iterator end = m_frames.end();
-  m_selected_frame_idx = 0;
+    const_iterator pos;
+    const_iterator begin = m_frames.begin();
+    const_iterator end = m_frames.end();
+    m_selected_frame_idx = 0;
 
-  for (pos = begin; pos != end; ++pos) {
-    if (pos->get() == frame) {
-      m_selected_frame_idx = std::distance(begin, pos);
-      uint32_t inlined_depth = GetCurrentInlinedDepth();
-      if (inlined_depth != UINT32_MAX)
-        m_selected_frame_idx = *m_selected_frame_idx - inlined_depth;
-      break;
+    for (pos = begin; pos != end; ++pos) {
+      if (pos->get() == frame) {
+        m_selected_frame_idx = std::distance(begin, pos);
+        uint32_t inlined_depth = GetCurrentInlinedDepth();
+        if (inlined_depth != UINT32_MAX)
+          m_selected_frame_idx = *m_selected_frame_idx - inlined_depth;
+        break;
+      }
     }
-  }
+  } // release shared_lock before acquiring write lock inside GetFrameAtIndex
   SetDefaultFileAndLineToSelectedFrame();
   return *m_selected_frame_idx;
 }
