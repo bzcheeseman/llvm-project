@@ -1,0 +1,43 @@
+# Tests per-frame elision: only native frames whose function name matches
+# __ibid_function_elision_regex are hidden. The entire interpreter machinery —
+# bridge glue (__ibid_breakpoint_hit, ProgramState_call) and CPython internals
+# (trace_trampoline, PyEval_*, Py_RunMain, etc.) — is elided, leaving the
+# backtrace with synthetic Python frames followed directly by OS/runtime frames.
+
+# REQUIRES: python
+# UNSUPPORTED: system-windows
+
+# RUN: env PYTHONPATH=%ibid_lib_dir %lldb -b \
+# RUN:   -o "settings set target.enable-native-interpreter true" \
+# RUN:   -o "file %python" \
+# RUN:   -o "settings set target.run-args %S/Inputs/ibid_test.py" \
+# RUN:   -o "breakpoint set --file ibid_test.py --line 5" \
+# RUN:   -o "run" \
+# RUN:   -o "bt" \
+# RUN:   -o "quit" \
+# RUN:   2>&1 | FileCheck %s
+
+# Anchor on the echoed "bt" command so CHECK-NEXT operates on the consecutive
+# frame lines in the backtrace output.
+# CHECK: (lldb) bt
+
+# Synthetic frames must appear in strict consecutive order.
+# CHECK:      frame #0: add at ibid_test.py:5{{.*}} [synthetic]
+# CHECK-NEXT: frame #1: compute at ibid_test.py:8{{.*}} [synthetic]
+# CHECK-NEXT: frame #2: main at ibid_test.py:13{{.*}} [synthetic]
+# CHECK-NEXT: frame #3: <module> at ibid_test.py:20{{.*}} [synthetic]
+
+# Frame #4 is the first OS/runtime frame — the entire interpreter stack
+# (bridge + CPython internals) has been elided.
+# CHECK-NEXT: frame #4:{{.*}}libc.so
+
+# Bridge and interpreter-engine frames must not appear anywhere.
+# CHECK-NOT: lldb_bridge.so`
+# CHECK-NOT: `__ibid_breakpoint_hit
+# CHECK-NOT: `ProgramState_call
+# CHECK-NOT: `trace_trampoline
+# CHECK-NOT: `call_trampoline
+# CHECK-NOT: `_PyEval_EvalFrameDefault
+# CHECK-NOT: `run_mod
+# CHECK-NOT: `Py_RunMain
+# CHECK-NOT: `Py_BytesMain

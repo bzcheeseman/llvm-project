@@ -72,8 +72,8 @@ IBID_SYMBOL volatile __ibid_program_point *__ibid_current_backtrace = nullptr;
 /// Provide the debugger with a regex we can use for functions (frames) that we
 /// should elide.
 IBID_SYMBOL __ibid_string __ibid_function_elision_regex =
-    "^_?[Pp]y(Eval|Object|[Rr]un|main).*|^call_trampoline$|^trace_trampoline$|^"
-    "builtin_exec$|^run_mod$";
+    "^_?[Pp]y_?(Call|Eval|Object|[Rr]un|main|Bytes).*|^call_trampoline$|^trace_trampoline$|^"
+    "builtin_exec$|^run_mod$|^(::)?__ibid_breakpoint_hit|^ProgramState_call";
 
 /// Get the local variable names for frame at index `idx` as JSON.
 IBID_SYMBOL __ibid_string __ibid_get_frame_local_names(unsigned idx);

@@ -457,31 +457,51 @@ InterpretedFrameProvider::GetNumInterpretedFrames(lldb::ProcessSP process_sp) {
   return m_num_interpreted_frames;
 }
 
-bool InterpretedFrameProvider::ShouldElideFrame(lldb::StackFrameSP frame_sp,
-                                                lldb::ProcessSP process_sp) {
-  auto &target = process_sp->GetTarget();
-  // TODO: should maybe cache this search? Though if the loaded module list
-  // changes that could be bad...
-  VariableList variable_list;
-  target.GetImages().FindGlobalVariables(
-      ConstString("__ibid_function_elision_regex"), 1, variable_list);
-  if (variable_list.GetSize() != 1) {
-    return false;
+uint32_t InterpretedFrameProvider::GetNonElidedNativeFrameIdx(
+    ProcessSP process_sp, uint32_t n) {
+  // Read the elision regex from the bridge.
+  std::string regex_str;
+  VariableList var_list;
+  process_sp->GetTarget().GetImages().FindGlobalVariables(
+      ConstString("__ibid_function_elision_regex"), 1, var_list);
+  if (var_list.GetSize() == 1) {
+    ValueObjectSP vo = ValueObjectVariable::Create(
+        (ExecutionContextScope *)process_sp.get(),
+        var_list.GetVariableAtIndex(0));
+    if (vo) {
+      auto str_or = ReadIBIDStringFromInferior(vo.get());
+      if (str_or)
+        regex_str = std::move(*str_or);
+      else
+        LLDB_LOG_ERROR(GetLog(LLDBLog::Target), str_or.takeError(),
+                       "error reading __ibid_function_elision_regex: {0}");
+    }
   }
 
-  ExecutionContextScope *exe_scope = process_sp.get();
-  ValueObjectSP regex = ValueObjectVariable::Create(
-      exe_scope, variable_list.GetVariableAtIndex(0));
-  assert(regex);
-  auto string_or = ReadIBIDStringFromInferior(regex.get());
-  if (auto err = string_or.takeError()) {
-    LLDB_LOG_ERROR(GetLog(LLDBLog::Target), std::move(err),
-                   "error reading __ibid_function_elision_regex from inferior");
-    return false;
-  }
+  if (regex_str.empty())
+    return n; // no elision: the n-th passthrough frame is at native index n
 
-  llvm::Regex r{*string_or, llvm::Regex::IgnoreCase};
-  return r.match(frame_sp->GetFunctionName());
+  llvm::Regex r{regex_str, llvm::Regex::IgnoreCase};
+
+  // Walk concrete frames, skipping those whose function name matches the
+  // elision regex (interpreter engine internals). Return the native index of
+  // the n-th surviving frame.
+  uint32_t non_elided = 0;
+  for (uint32_t i = 0;; i++) {
+    auto frame_sp = m_input_frames->GetFrameAtIndex(i);
+    if (!frame_sp)
+      return UINT32_MAX; // exhausted
+    const char *fn = frame_sp->GetFunctionName();
+    if (fn && r.match(fn))
+      continue; // matches elision regex — skip this frame
+    if (non_elided == n) {
+      LLDB_LOG(GetLog(LLDBLog::Target),
+               "interpreter frame elision: passthrough[{0}] → native[{1}] ({2})",
+               n, i, fn ? fn : "<unknown>");
+      return i;
+    }
+    ++non_elided;
+  }
 }
 
 llvm::Expected<lldb::StackFrameSP>
@@ -514,10 +534,6 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
   if (num_frames == 0)
     return frame_at_index_sp;
 
-  // Check if we should elide this frame. This is defined by the IBID plugin.
-  if (!ShouldElideFrame(frame_at_index_sp, process_sp))
-    return frame_at_index_sp;
-
   // Interpreter frames are available. Synthetic frames always start at provider
   // index 0 (m_index_offset is always 0 once set). If this is the first
   // call with interpreter frames and we're not at index 0, signal the frame
@@ -534,15 +550,17 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
     if (process_sp->GetTarget().GetNativeInterpreterHideNativeFrames())
       return llvm::createStringError("native frames hidden");
 
-    // Synthetic frames are exhausted. Return the native C frame that sits at
-    // this merged index so the backtrace continues with the real call stack
-    // below the interpreter.
-    uint32_t native_idx = idx - num_frames;
-    auto native_sp = m_input_frames->GetFrameAtIndex(native_idx);
+    // Synthetic frames are exhausted. Return the n-th native frame that does
+    // not match __ibid_function_elision_regex, skipping interpreter-engine
+    // internals (trace_trampoline, PyEval_*, run_mod, etc.) while preserving
+    // any other frames (bridge glue, launcher, OS) exactly where they appear.
+    uint32_t native_frame_idx =
+        GetNonElidedNativeFrameIdx(process_sp, idx - num_frames);
+    if (native_frame_idx == UINT32_MAX)
+      return llvm::createStringError("no more frames");
+    auto native_sp = m_input_frames->GetFrameAtIndex(native_frame_idx);
     if (!native_sp)
       return llvm::createStringError("no more frames");
-    // Update the frame index to its position in the merged (synthetic) list
-    // so it displays correctly in bt output.
     native_sp->SetFrameIndex(idx);
     return native_sp;
   }

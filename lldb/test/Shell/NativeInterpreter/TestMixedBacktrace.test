@@ -1,5 +1,8 @@
 # Tests that a full backtrace shows synthetic interpreter frames at the top
-# followed by the native C frames from the interpreter below them.
+# followed by OS/runtime frames. All interpreter-engine frames — bridge glue
+# (__ibid_breakpoint_hit, ProgramState_call) and Python internals matching
+# __ibid_function_elision_regex — are hidden; only frames above the interpreter
+# (libc, _start, etc.) appear.
 
 # REQUIRES: python
 # UNSUPPORTED: system-windows
@@ -16,10 +19,14 @@
 
 # Synthetic interpreter frames start at frame #0.
 # CHECK: frame #0: add at ibid_test.py:5{{.*}} [synthetic]
+# CHECK: frame #1: compute at ibid_test.py
+# CHECK: frame #2: main at ibid_test.py
+# CHECK: frame #3: <module> at ibid_test.py
 
-# Native C frames appear after the synthetic ones. The topmost C frame is
-# the IBID breakpoint anchor (__ibid_breakpoint_hit for a source-line BP,
-# __ibid_debugger_anchor for the slow-path anchor), followed by
-# ProgramState_call which drives the trace.
-# CHECK: lldb_bridge.so`
-# CHECK: lldb_bridge.so`ProgramState_call
+# After the synthetic frames, only OS/runtime frames remain.
+# CHECK: python3{{.*}}`
+
+# Bridge and Python-internal frames must not appear.
+# CHECK-NOT: lldb_bridge.so`
+# CHECK-NOT: `trace_trampoline
+# CHECK-NOT: `_PyEval_EvalFrameDefault

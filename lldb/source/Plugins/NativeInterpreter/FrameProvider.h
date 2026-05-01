@@ -9,6 +9,8 @@
 #include "lldb/Target/SyntheticFrameProvider.h"
 #include "lldb/lldb-forward.h"
 
+#include <string>
+
 namespace lldb_private {
 class InterpretedFrameProvider : public SyntheticFrameProvider {
 public:
@@ -47,8 +49,12 @@ private:
   /// Get the number of interpreter frames.
   unsigned GetNumInterpretedFrames(lldb::ProcessSP process_sp);
 
-  /// Check if we should elide this frame.
-  bool ShouldElideFrame(lldb::StackFrameSP frame_sp, lldb::ProcessSP process_sp);
+  /// Return the concrete native-frame index of the n-th non-elided frame.
+  /// Walks all concrete frames, skips those whose function name matches
+  /// __ibid_function_elision_regex (interpreter engine internals), and returns
+  /// the index of the n-th surviving frame. Returns UINT32_MAX when the stack
+  /// is exhausted before reaching n.
+  uint32_t GetNonElidedNativeFrameIdx(lldb::ProcessSP process_sp, uint32_t n);
 
   /// Frame index offset: always 0 once interpreter frames are available, meaning
   /// synthetic frame i is returned for provider index i.
