@@ -176,29 +176,57 @@ public:
   }
 
   llvm::Expected<std::vector<std::string>> GetIBIDLocalNames() {
-    // NOTE: DO NOT use GetFrameIndex here - that causes an infinite recursive
-    // loop where we attempt to construct frame providers/etc. Use m_frame_index
-    // here instead.
-    std::string expr = llvm::formatv("__ibid_get_frame_local_names({0})",
-                                     m_frame_index - m_index_offset);
+    // Read from __ibid_local_names[frame_idx] via direct memory access.
+    // The bridge populates this global just before __ibid_breakpoint_hit /
+    // __ibid_step_hit fires, so the data is always current at a stop point.
+    // This avoids Target::EvaluateExpression, which would deadlock on macOS
+    // because it tries to acquire the process run lock in write mode while
+    // frame list construction already holds it.
+    uint32_t frame_idx = m_frame_index - m_index_offset;
 
-    auto locals_or = DoEvaluateExpression(expr);
-    if (auto err = locals_or.takeError())
+    VariableList var_list;
+    process_sp->GetTarget().GetImages().FindGlobalVariables(
+        ConstString("__ibid_local_names"), 1, var_list);
+    if (var_list.GetSize() != 1)
+      return std::vector<std::string>{};
+
+    ValueObjectSP names_sp = ValueObjectVariable::Create(
+        (ExecutionContextScope *)process_sp.get(),
+        var_list.GetVariableAtIndex(0));
+    if (!names_sp)
+      return llvm::createStringError("failed to read __ibid_local_names");
+
+    // Bail out if the pointer is null (no frames stopped yet).
+    if (names_sp->GetValueAsUnsigned(0) == 0)
+      return std::vector<std::string>{};
+
+    auto type = names_sp->GetCompilerType();
+    auto pointee_size_or = type.GetPointeeType().GetByteSize(
+        (ExecutionContextScope *)process_sp.get());
+    if (auto err = pointee_size_or.takeError())
       return err;
 
-    // Read the value from memory.
-    auto string_or = ReadIBIDStringFromInferior(locals_or->get());
+    ValueObjectSP entry_sp = names_sp->GetSyntheticChildAtOffset(
+        frame_idx * *pointee_size_or, type.GetPointeeType(),
+        /*can_create=*/true);
+    if (!entry_sp)
+      return std::vector<std::string>{};
+
+    auto string_or = ReadIBIDStringFromInferior(entry_sp.get());
     if (auto err = string_or.takeError())
       return err;
 
-    // Now, parse the string.
+    if (string_or->empty())
+      return std::vector<std::string>{};
+
     auto json = llvm::json::parse(*string_or);
     if (auto err = json.takeError())
       return err;
 
-    // Construct the list.
     std::vector<std::string> out;
     auto *arr = json->getAsArray();
+    if (!arr)
+      return std::vector<std::string>{};
     for (auto &v : *arr)
       out.emplace_back(v.getAsString().value_or(""));
 

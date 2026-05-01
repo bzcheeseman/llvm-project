@@ -69,6 +69,11 @@ IBID_SYMBOL volatile unsigned __ibid_num_frames = 0;
 /// debugger can look up. Counted by __ibid_num_frames.
 IBID_SYMBOL volatile __ibid_program_point *__ibid_current_backtrace = nullptr;
 
+/// Array of local variable name JSON arrays, one per interpreter frame.
+/// Populated just before __ibid_breakpoint_hit or __ibid_step_hit fires so
+/// LLDB can read it via direct memory access without running any code.
+IBID_SYMBOL volatile __ibid_string *__ibid_local_names = nullptr;
+
 /// Provide the debugger with a regex we can use for functions (frames) that we
 /// should elide.
 IBID_SYMBOL __ibid_string __ibid_function_elision_regex =
@@ -307,10 +312,10 @@ struct ProgramPoint {
   std::unordered_map<std::string, std::string> valueCache = {};
   bool valueCachePopulated = false;
 
-  /// Render the local variable names.
+  /// Render the local variable names as a JSON array string.
   void renderNames() {
-    if (!valueCachePopulated) {
-      *logfile << "empty valueCache\n";
+    if (!valueCachePopulated || valueCache.empty()) {
+      renderedNames = "[]";
       return;
     }
 
@@ -342,6 +347,11 @@ struct ProgramState {
   PyObject_HEAD std::vector<ProgramPoint> current_frames;
   std::vector<__ibid_program_point> framelist;
 
+  // Backing storage for __ibid_local_names. Each element owns the string data;
+  // localNamesFrame holds the __ibid_string views into that storage.
+  std::vector<std::string> localNamesStorage;
+  std::vector<__ibid_string> localNamesFrame;
+
   /// Update the frame list and the global state based on current_frames.
   void update() {
     __ibid_num_frames = current_frames.size();
@@ -358,6 +368,27 @@ struct ProgramState {
     // And set the pointer.
     __ibid_current_backtrace = framelist.data();
     *logfile << "updated __ibid_current_backtrace\n";
+  }
+
+  /// Populate __ibid_local_names from the current frame state. Called once
+  /// per stop (just before __ibid_breakpoint_hit / __ibid_step_hit) so LLDB
+  /// can read variable names via direct memory access instead of expression
+  /// evaluation, avoiding the run-lock deadlock on macOS.
+  void updateLocalNames() {
+    size_t n = current_frames.size();
+    localNamesStorage.resize(n);
+    localNamesFrame.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+      auto &frame = current_frames[i];
+      frame.populateLocals();
+      frame.renderNames();
+      localNamesStorage[i] = frame.renderedNames;
+      // Store a view into the stable string storage. localNamesStorage is not
+      // reallocated after resize, so .data() remains valid.
+      localNamesFrame[i] = __ibid_string{localNamesStorage[i]};
+    }
+    __ibid_local_names = n > 0 ? localNamesFrame.data() : nullptr;
+    *logfile << "updated __ibid_local_names for " << n << " frames\n";
   }
 };
 } // namespace
@@ -568,6 +599,7 @@ static PyObject *ProgramState_call(ProgramState *self, PyObject *args,
           (unsigned)top.line == bp.line &&
           (bp.col == 0 || (unsigned)top.col == bp.col)) {
         __ibid_hit_id = bp.id;
+        self->updateLocalNames();
         __ibid_breakpoint_hit();
         break;
       }
@@ -586,6 +618,7 @@ static PyObject *ProgramState_call(ProgramState *self, PyObject *args,
          !ibid_filename_matches(top.filename, g_step_start_filename));
     if (stepped_out || same_depth_new_line) {
       g_step_active = false;
+      self->updateLocalNames();
       __ibid_step_hit();
     }
   }
