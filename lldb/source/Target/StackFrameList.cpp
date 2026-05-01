@@ -140,24 +140,6 @@ bool SyntheticStackFrameList::FetchFramesUpTo(
 }
 
 lldb::StackFrameSP SyntheticStackFrameList::GetFrameAtIndex(uint32_t idx) {
-  // When the provider is active and frame 0 is already cached as a concrete
-  // (non-synthetic) frame, that frame was captured before interpreter frames were
-  // available. Evict it so the provider can re-fetch frame 0 as an interpreter frame.
-  if (m_provider && idx == 0) {
-    bool needs_evict = false;
-    {
-      std::shared_lock<std::shared_mutex> guard(m_list_mutex);
-      needs_evict =
-          !m_frames.empty() && m_frames[0] && !m_frames[0]->IsSynthetic();
-    }
-    if (needs_evict) {
-      std::unique_lock<std::shared_mutex> guard(m_list_mutex);
-      if (!m_frames.empty() && m_frames[0] && !m_frames[0]->IsSynthetic()) {
-        m_frames.clear();
-        m_concrete_frames_fetched = 0;
-      }
-    }
-  }
   return StackFrameList::GetFrameAtIndex(idx);
 }
 

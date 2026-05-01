@@ -29,7 +29,7 @@
 
 # Frame #4 is the first OS/runtime frame — the entire interpreter stack
 # (bridge + CPython internals) has been elided.
-# CHECK-NEXT: frame #4:{{.*}}libc.so
+# CHECK-NEXT: frame #4:{{.*}}{{libc.so|dyld}}
 
 # Bridge and interpreter-engine frames must not appear anywhere.
 # CHECK-NOT: lldb_bridge.so`

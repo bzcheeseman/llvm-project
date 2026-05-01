@@ -1,0 +1,37 @@
+# Tests that `frame variable` and expression evaluation work for interpreted
+# frames: individual variable lookup, listing all locals, and compound
+# expressions that combine multiple variables.
+
+# REQUIRES: python
+# UNSUPPORTED: system-windows
+
+# RUN: env PYTHONPATH=%ibid_lib_dir %lldb -b \
+# RUN:   -o "settings set target.enable-native-interpreter true" \
+# RUN:   -o "file %python" \
+# RUN:   -o "settings set target.run-args %S/Inputs/ibid_test.py" \
+# RUN:   -o "breakpoint set --file ibid_test.py --line 5" \
+# RUN:   -o "run" \
+# RUN:   -o "frame variable" \
+# RUN:   -o "frame variable a" \
+# RUN:   -o "frame variable b" \
+# RUN:   -o "frame variable \"a + b\"" \
+# RUN:   -o "quit" \
+# RUN:   2>&1 | FileCheck %s
+
+# The breakpoint fires inside add(a=3, b=4) called from compute(3, 4).
+
+# `frame variable` lists all locals. Order from the bridge's unordered_map is
+# not guaranteed, so use CHECK-DAG to allow either ordering.
+# CHECK-DAG: (__ibid_string) a = (data = "3"
+# CHECK-DAG: (__ibid_string) b = (data = "4"
+
+# Individual variable lookup.
+# CHECK: (lldb) frame variable a
+# CHECK: data = "3"
+
+# CHECK: (lldb) frame variable b
+# CHECK: data = "4"
+
+# Compound expression evaluated in the frame.
+# CHECK: (lldb) frame variable "a + b"
+# CHECK: data = "7"

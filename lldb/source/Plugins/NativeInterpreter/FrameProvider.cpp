@@ -176,29 +176,57 @@ public:
   }
 
   llvm::Expected<std::vector<std::string>> GetIBIDLocalNames() {
-    // NOTE: DO NOT use GetFrameIndex here - that causes an infinite recursive
-    // loop where we attempt to construct frame providers/etc. Use m_frame_index
-    // here instead.
-    std::string expr = llvm::formatv("__ibid_get_frame_local_names({0})",
-                                     m_frame_index - m_index_offset);
+    // Read from __ibid_local_names[frame_idx] via direct memory access.
+    // The bridge populates this global just before __ibid_breakpoint_hit /
+    // __ibid_step_hit fires, so the data is always current at a stop point.
+    // This avoids Target::EvaluateExpression, which would deadlock on macOS
+    // because it tries to acquire the process run lock in write mode while
+    // frame list construction already holds it.
+    uint32_t frame_idx = m_frame_index - m_index_offset;
 
-    auto locals_or = DoEvaluateExpression(expr);
-    if (auto err = locals_or.takeError())
+    VariableList var_list;
+    process_sp->GetTarget().GetImages().FindGlobalVariables(
+        ConstString("__ibid_local_names"), 1, var_list);
+    if (var_list.GetSize() != 1)
+      return std::vector<std::string>{};
+
+    ValueObjectSP names_sp = ValueObjectVariable::Create(
+        (ExecutionContextScope *)process_sp.get(),
+        var_list.GetVariableAtIndex(0));
+    if (!names_sp)
+      return llvm::createStringError("failed to read __ibid_local_names");
+
+    // Bail out if the pointer is null (no frames stopped yet).
+    if (names_sp->GetValueAsUnsigned(0) == 0)
+      return std::vector<std::string>{};
+
+    auto type = names_sp->GetCompilerType();
+    auto pointee_size_or = type.GetPointeeType().GetByteSize(
+        (ExecutionContextScope *)process_sp.get());
+    if (auto err = pointee_size_or.takeError())
       return err;
 
-    // Read the value from memory.
-    auto string_or = ReadIBIDStringFromInferior(locals_or->get());
+    ValueObjectSP entry_sp = names_sp->GetSyntheticChildAtOffset(
+        frame_idx * *pointee_size_or, type.GetPointeeType(),
+        /*can_create=*/true);
+    if (!entry_sp)
+      return std::vector<std::string>{};
+
+    auto string_or = ReadIBIDStringFromInferior(entry_sp.get());
     if (auto err = string_or.takeError())
       return err;
 
-    // Now, parse the string.
+    if (string_or->empty())
+      return std::vector<std::string>{};
+
     auto json = llvm::json::parse(*string_or);
     if (auto err = json.takeError())
       return err;
 
-    // Construct the list.
     std::vector<std::string> out;
     auto *arr = json->getAsArray();
+    if (!arr)
+      return std::vector<std::string>{};
     for (auto &v : *arr)
       out.emplace_back(v.getAsString().value_or(""));
 
@@ -515,30 +543,32 @@ InterpretedFrameProvider::GetFrameAtIndex(uint32_t idx) {
   ThreadSP thread_sp = GetThread().shared_from_this();
   ProcessSP process_sp = thread_sp->GetProcess();
 
-  // Get the concrete frame at this index from the unwinder. We use it to
-  // reach the process/thread for reading inferior state. When interpreter
-  // frames are available we replace it entirely with a synthetic frame; when no
-  // interpreter frames are present we pass it through unchanged.
   auto frame_at_index_sp = m_input_frames->GetFrameAtIndex(idx);
   if (frame_at_index_sp) {
     // Already a synthetic interpreted frame — return it directly.
     if (llvm::isa<InterpretedFrame>(frame_at_index_sp.get()))
       return frame_at_index_sp;
-  } else {
-    // No frame at this index; fall back to the zeroth concrete frame so we
-    // can still read the process/thread state.
-    frame_at_index_sp = m_input_frames->GetFrameWithConcreteFrameIndex(0);
   }
-
-  if (!frame_at_index_sp)
-    return llvm::createStringError("no frame at index 0?");
 
   unsigned num_frames = GetNumInterpretedFrames(process_sp);
 
-  // No interpreter frames yet — return the underlying concrete frame
-  // unchanged.
-  if (num_frames == 0)
+  // No interpreter frames yet — pass concrete frames through unchanged.
+  // A null frame means we've walked past the end of the concrete stack;
+  // return an error so FetchFramesUpTo stops and marks all frames fetched.
+  if (num_frames == 0) {
+    if (!frame_at_index_sp)
+      return llvm::createStringError("no more frames");
     return frame_at_index_sp;
+  }
+
+  // Interpreter frames are available. We need a valid frame object to read
+  // process/thread state from when building synthetic frames. Fall back to
+  // the zeroth concrete frame if idx is past the end of the native stack.
+  if (!frame_at_index_sp) {
+    frame_at_index_sp = m_input_frames->GetFrameWithConcreteFrameIndex(0);
+    if (!frame_at_index_sp)
+      return llvm::createStringError("no frame at index 0?");
+  }
 
   // Interpreter frames are available. Synthetic frames always start at provider
   // index 0 (m_index_offset is always 0 once set). If this is the first

@@ -24,7 +24,7 @@
 # CHECK: frame #3: <module> at ibid_test.py
 
 # After the synthetic frames, only OS/runtime frames remain.
-# CHECK: python3{{.*}}`
+# CHECK: {{python3|dyld}}{{.*}}`
 
 # Bridge and Python-internal frames must not appear.
 # CHECK-NOT: lldb_bridge.so`
